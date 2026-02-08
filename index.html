@@ -1,0 +1,1541 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Side-Scrolling Platformer</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: #1a1a2e;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+      overflow: hidden;
+    }
+    canvas {
+      border: 2px solid #333;
+      image-rendering: pixelated;
+    }
+    #ui-overlay {
+      position: absolute;
+      top: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      color: white;
+      font-family: monospace;
+      font-size: 14px;
+      pointer-events: none;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+  <div id="ui-overlay"></div>
+  <canvas id="gameCanvas"></canvas>
+
+  <script>
+// =============================================================================
+// CANVAS SETUP
+// =============================================================================
+
+const canvas = document.getElementById("gameCanvas");
+const ctx = canvas.getContext("2d");
+const ui = document.getElementById("ui-overlay");
+
+canvas.width = 800;
+canvas.height = 500;
+
+// =============================================================================
+// GAME CONSTANTS
+// =============================================================================
+
+const GRAVITY = 0.6;           // Downward acceleration per frame
+const JUMP_FORCE = -13;        // Upward velocity when jumping (negative = up)
+const MOVE_SPEED = 5;          // Horizontal movement speed
+const FRICTION = 0.8;          // Horizontal deceleration (1 = no friction)
+const MAX_FALL_SPEED = 15;     // Terminal velocity cap
+
+const PROJECTILE_SPEED = 9;    // Horizontal speed of projectiles
+const PROJECTILE_SIZE = 10;    // Placeholder size (square dot)
+const SHOOT_COOLDOWN = 15;     // Frames between shots (~0.25s at 60fps)
+
+const BOSS_JUMP_FORCE = -11;          // Boss jump strength
+const BOSS_SHOOT_INTERVAL_MIN = 90;   // Min frames between boss shots
+const BOSS_SHOOT_INTERVAL_MAX = 180;  // Max frames between boss shots
+const BOSS_JUMP_INTERVAL_MIN = 120;   // Min frames between boss jumps
+const BOSS_JUMP_INTERVAL_MAX = 240;   // Max frames between boss jumps
+const BOSS_BLASTER_SPEED = 5;         // Speed of boss projectiles
+
+const PLAYER_INVINCIBLE_TIME = 60;    // Frames of invincibility after hit
+const PLAYER_HP_BAR_DURATION = 180;   // Frames to show health bar (~3s)
+
+// Fallback sky color shown while background image loads or if it fails
+const SKY_COLOR = "#5dadec";
+
+// =============================================================================
+// ASSET LOADING
+// Load all images before starting the game. Each entry tracks whether the
+// image loaded successfully so we can fall back to rectangles if needed.
+// =============================================================================
+
+const assets = {
+  player:      { img: new Image(), loaded: false },
+  enemy:       { img: new Image(), loaded: false },
+  background:  { img: new Image(), loaded: false },
+  portal:      { img: new Image(), loaded: false },
+  background2: { img: new Image(), loaded: false },
+  boss:        { img: new Image(), loaded: false },
+};
+
+/** Returns a Promise that resolves once an image loads (or fails gracefully) */
+function loadImage(asset, src) {
+  return new Promise((resolve) => {
+    asset.img.onload = () => { asset.loaded = true; resolve(); };
+    asset.img.onerror = () => {
+      console.warn(`Could not load "${src}" — using fallback rectangle.`);
+      resolve(); // Don't block the game if an image is missing
+    };
+    asset.img.src = src;
+  });
+}
+
+/**
+ * Load all assets, show a loading screen, then start the game.
+ * Images are in the same folder as index.html.
+ */
+async function loadAllAssets() {
+  // Show loading text
+  ctx.fillStyle = "#1a1a2e";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = "white";
+  ctx.font = "20px monospace";
+  ctx.textAlign = "center";
+  ctx.fillText("Loading assets...", canvas.width / 2, canvas.height / 2);
+  ctx.textAlign = "left";
+
+  // --- Design 2 (_j suffix) --- Switch to Design 1 by removing the _j suffix
+  await Promise.all([
+    loadImage(assets.player,      "player.png"),
+    loadImage(assets.enemy,       "enemy.png"),
+    loadImage(assets.background,  "background.png"),
+    loadImage(assets.portal,      "portal.png"),
+    loadImage(assets.background2, "background2.png"),
+    loadImage(assets.boss,        "boss.png"),
+  ]);
+
+  // Load Level 1 and start the game loop
+  loadLevel(0);
+  gameLoop();
+}
+
+// =============================================================================
+// INPUT HANDLING
+// Track which keys are currently held down
+// =============================================================================
+
+const keys = {};
+
+window.addEventListener("keydown", (e) => {
+  keys[e.code] = true;
+  // Prevent page scrolling with arrow keys / space
+  if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Space", "ShiftLeft", "ShiftRight"].includes(e.code)) {
+    e.preventDefault();
+  }
+});
+
+window.addEventListener("keyup", (e) => {
+  keys[e.code] = false;
+});
+
+// =============================================================================
+// CAMERA
+// The camera follows the player horizontally with a smooth offset.
+// =============================================================================
+
+const camera = {
+  x: 0,
+  y: 0,
+
+  /** Keep the player roughly 1/3 from the left side of the screen */
+  follow(target) {
+    this.x = target.x - canvas.width * 0.33;
+    // Prevent camera from going left of the level start
+    if (this.x < 0) this.x = 0;
+  }
+};
+
+// =============================================================================
+// PLAYER
+// =============================================================================
+
+const player = {
+  x: 100,               // World position
+  y: 300,
+  width: 48,             // Scaled up from 32 for sprite detail
+  height: 64,            // Scaled up from 48 for sprite detail
+  velX: 0,              // Horizontal velocity
+  velY: 0,              // Vertical velocity
+  onGround: false,      // Whether we're standing on something
+  color: "#e63946",     // Placeholder color — replace with sprite later
+  facing: 1,            // 1 = right, -1 = left (useful for sprite flipping)
+  hp: 12,               // Player health (2x boss HP)
+  maxHp: 12,
+  invincibleTimer: 0,   // Frames of invincibility after being hit
+  hpBarTimer: 0,        // Countdown for showing health bar
+
+  /** Reset the player back to the start */
+  reset() {
+    this.x = 100;
+    this.y = 300;
+    this.velX = 0;
+    this.velY = 0;
+    this.onGround = false;
+    this.hp = this.maxHp;
+    this.invincibleTimer = 0;
+    this.hpBarTimer = 0;
+  },
+
+  update() {
+    // Don't allow input during transitions or victory
+    if (transitionTimer > 0 || victoryScreen) return;
+
+    // ---- Invincibility & HP bar timers ----
+    if (this.invincibleTimer > 0) this.invincibleTimer--;
+    if (this.hpBarTimer > 0) this.hpBarTimer--;
+
+    // ---- Horizontal movement ----
+    if (keys["ArrowLeft"]) {
+      this.velX = -MOVE_SPEED;
+      this.facing = -1;
+    } else if (keys["ArrowRight"]) {
+      this.velX = MOVE_SPEED;
+      this.facing = 1;
+    } else {
+      // Decelerate when no key is pressed
+      this.velX *= FRICTION;
+      if (Math.abs(this.velX) < 0.5) this.velX = 0;
+    }
+
+    // ---- Jumping ----
+    if ((keys["ArrowUp"] || keys["Space"]) && this.onGround) {
+      this.velY = JUMP_FORCE;
+      this.onGround = false;
+    }
+
+    // ---- Shooting ----
+    if (shootCooldown > 0) shootCooldown--;
+    if ((keys["ShiftLeft"] || keys["ShiftRight"]) && shootCooldown === 0) {
+      projectiles.push({
+        x: this.x + this.width / 2 - PROJECTILE_SIZE / 2,
+        y: this.y + this.height / 2 - PROJECTILE_SIZE / 2,
+        velX: PROJECTILE_SPEED * this.facing,
+        facing: this.facing,
+        age: 0,
+        trail: [],
+      });
+      shootCooldown = SHOOT_COOLDOWN;
+    }
+
+    // ---- Gravity ----
+    this.velY += GRAVITY;
+    if (this.velY > MAX_FALL_SPEED) this.velY = MAX_FALL_SPEED;
+
+    // ---- Apply movement ----
+    this.x += this.velX;
+    this.y += this.velY;
+
+    // ---- World bounds ----
+    // Don't let the player walk off the left edge
+    if (this.x < 0) {
+      this.x = 0;
+      this.velX = 0;
+    }
+
+    // If the player falls below the screen, they die
+    if (this.y > canvas.height + 100) {
+      die();
+    }
+  },
+
+  draw() {
+    const screenX = this.x - camera.x;
+    const screenY = this.y - camera.y;
+
+    // Flash during invincibility (skip drawing every other 4-frame block)
+    if (this.invincibleTimer > 0 && Math.floor(this.invincibleTimer / 4) % 2 === 0) {
+      return;
+    }
+
+    if (assets.player.loaded) {
+      // Draw the player sprite, scaled to fit the hitbox.
+      // When facing left, flip the image horizontally using a negative scale.
+      ctx.save();
+      if (this.facing === -1) {
+        // Flip: translate to the right edge, then scale x by -1
+        ctx.translate(screenX + this.width, screenY);
+        ctx.scale(-1, 1);
+        ctx.drawImage(assets.player.img, 0, 0, this.width, this.height);
+      } else {
+        ctx.drawImage(assets.player.img, screenX, screenY, this.width, this.height);
+      }
+      ctx.restore();
+    } else {
+      // Fallback: colored rectangle with eyes (original placeholder)
+      ctx.fillStyle = this.color;
+      ctx.fillRect(screenX, screenY, this.width, this.height);
+      ctx.fillStyle = "white";
+      const eyeOffsetX = this.facing === 1 ? 28 : 8;
+      ctx.fillRect(screenX + eyeOffsetX, screenY + 16, 12, 12);
+      ctx.fillStyle = "#1a1a2e";
+      const pupilOffsetX = this.facing === 1 ? 34 : 8;
+      ctx.fillRect(screenX + pupilOffsetX, screenY + 20, 6, 6);
+    }
+  }
+};
+
+// =============================================================================
+// LEVEL DATA
+// Each level defines platforms, enemies, decorations, background, portal, boss.
+// =============================================================================
+
+const levels = [
+  // ---- LEVEL 1 ----
+  {
+    backgroundKey: "background",
+    platforms: [
+      // Ground segments
+      { x: 0,    y: 450, width: 3200, height: 50, color: "#4a1a1a" },
+
+      // Floating platforms at various heights
+      { x: 250,  y: 350, width: 150,  height: 20, color: "#6b2d2d" },
+      { x: 500,  y: 280, width: 180,  height: 20, color: "#723333" },
+      { x: 780,  y: 340, width: 140,  height: 20, color: "#6b2d2d" },
+      { x: 1000, y: 260, width: 200,  height: 20, color: "#7a3838" },
+
+      // Gap in the ground — bridged by floating platforms
+      { x: 1350, y: 450, width: 800,  height: 50, color: "#4a1a1a" },
+
+      { x: 1200, y: 350, width: 120,  height: 20, color: "#723333" },
+      { x: 1500, y: 300, width: 160,  height: 20, color: "#6b2d2d" },
+      { x: 1750, y: 370, width: 140,  height: 20, color: "#7a3838" },
+      { x: 2000, y: 280, width: 180,  height: 20, color: "#6b2d2d" },
+
+      // Final ground stretch with portal
+      { x: 2300, y: 450, width: 1000, height: 50, color: "#4a1a1a" },
+
+      { x: 2400, y: 340, width: 150,  height: 20, color: "#723333" },
+      { x: 2700, y: 260, width: 160,  height: 20, color: "#6b2d2d" },
+    ],
+    enemies: [
+      {
+        x: 520, y: 232, width: 42, height: 48,
+        speed: 1.0, direction: 1, minX: 500, maxX: 660, color: "#9b2226",
+      },
+      {
+        x: 1520, y: 252, width: 42, height: 48,
+        speed: 1.3, direction: -1, minX: 1500, maxX: 1640, color: "#9b2226",
+      },
+    ],
+    decorations: [
+      // Bushes (varied maroon/burgundy tones)
+      { x: 150,  y: 410, width: 80,  height: 40, color: "#7a3333", parallax: 0.3 },
+      { x: 500,  y: 420, width: 60,  height: 30, color: "#6b2828", parallax: 0.3 },
+      { x: 900,  y: 405, width: 100, height: 45, color: "#8b3d3d", parallax: 0.3 },
+      { x: 1400, y: 415, width: 70,  height: 35, color: "#723030", parallax: 0.3 },
+      { x: 2000, y: 410, width: 90,  height: 40, color: "#7a3333", parallax: 0.3 },
+      { x: 2500, y: 420, width: 75,  height: 35, color: "#8b3d3d", parallax: 0.3 },
+      // Clouds
+      { x: 100,  y: 60,  width: 120, height: 40, color: "rgba(255,255,255,0.6)", parallax: 0.15 },
+      { x: 450,  y: 90,  width: 90,  height: 30, color: "rgba(255,255,255,0.5)", parallax: 0.1 },
+      { x: 850,  y: 50,  width: 140, height: 45, color: "rgba(255,255,255,0.55)", parallax: 0.12 },
+      { x: 1300, y: 75,  width: 100, height: 35, color: "rgba(255,255,255,0.5)", parallax: 0.1 },
+      { x: 1800, y: 55,  width: 130, height: 42, color: "rgba(255,255,255,0.6)", parallax: 0.15 },
+      { x: 2400, y: 80,  width: 110, height: 38, color: "rgba(255,255,255,0.5)", parallax: 0.12 },
+    ],
+    portal: { x: 3100, y: 370, width: 48, height: 80 },
+    boss: null,
+  },
+
+  // ---- LEVEL 2 (Cave / Dungeon) ----
+  {
+    backgroundKey: "background2",
+    platforms: [
+      // Starting ground — extended for easier start
+      { x: 0,   y: 450, width: 700,  height: 50, color: "#5c4033" },
+
+      // Floating platforms above starting area for variety
+      { x: 250, y: 350, width: 120, height: 20, color: "#6b4f3a" },
+      { x: 500, y: 300, width: 140, height: 20, color: "#6b4f3a" },
+
+      // First gap (700–850, ~150px — easy jump)
+      { x: 850,  y: 450, width: 650,  height: 50, color: "#5c4033" },
+
+      // Floating platforms in mid-section
+      { x: 950,  y: 340, width: 120, height: 20, color: "#6b4f3a" },
+      { x: 1200, y: 300, width: 130, height: 20, color: "#6b4f3a" },
+
+      // Second gap (1500–1650, ~150px — easy jump)
+      { x: 1650, y: 450, width: 450, height: 50, color: "#5c4033" },
+
+      { x: 1750, y: 330, width: 120, height: 20, color: "#6b4f3a" },
+
+      // Boss arena — wide flat ground
+      { x: 2100, y: 450, width: 800, height: 50, color: "#5c4033" },
+
+      // Platforms above boss arena for stomping
+      { x: 2200, y: 300, width: 120, height: 20, color: "#6b4f3a" },
+      { x: 2450, y: 280, width: 140, height: 20, color: "#6b4f3a" },
+      { x: 2700, y: 300, width: 120, height: 20, color: "#6b4f3a" },
+    ],
+    enemies: [
+      {
+        x: 520, y: 252, width: 42, height: 48,
+        speed: 1.0, direction: 1, minX: 500, maxX: 640, color: "#9b2226",
+      },
+      {
+        x: 950, y: 402, width: 42, height: 48,
+        speed: 1.3, direction: -1, minX: 900, maxX: 1100, color: "#9b2226",
+      },
+      {
+        x: 1770, y: 282, width: 42, height: 48,
+        speed: 1.2, direction: 1, minX: 1750, maxX: 1870, color: "#9b2226",
+      },
+    ],
+    decorations: [
+      // Stalactites (hanging from ceiling)
+      { x: 200,  y: 0,   width: 20,  height: 60,  color: "#7a6652", parallax: 0.3, type: "stalactite" },
+      { x: 600,  y: 0,   width: 16,  height: 50,  color: "#7a6652", parallax: 0.3, type: "stalactite" },
+      { x: 1000, y: 0,   width: 22,  height: 70,  color: "#7a6652", parallax: 0.3, type: "stalactite" },
+      { x: 1500, y: 0,   width: 18,  height: 55,  color: "#7a6652", parallax: 0.3, type: "stalactite" },
+      { x: 2300, y: 0,   width: 20,  height: 65,  color: "#7a6652", parallax: 0.3, type: "stalactite" },
+      { x: 2600, y: 0,   width: 24,  height: 72,  color: "#7a6652", parallax: 0.3, type: "stalactite" },
+      // Glowing crystals on the ground
+      { x: 350,  y: 430, width: 16,  height: 20,  color: "#4ecdc4", parallax: 0.3, type: "crystal" },
+      { x: 900,  y: 430, width: 12,  height: 18,  color: "#a78bfa", parallax: 0.3, type: "crystal" },
+      { x: 1700, y: 430, width: 14,  height: 22,  color: "#4ecdc4", parallax: 0.3, type: "crystal" },
+      { x: 2400, y: 430, width: 16,  height: 20,  color: "#a78bfa", parallax: 0.3, type: "crystal" },
+      { x: 2750, y: 430, width: 12,  height: 18,  color: "#4ecdc4", parallax: 0.3, type: "crystal" },
+    ],
+    portal: null,
+    boss: {
+      x: 2350, y: 354, width: 80, height: 96,
+      speed: 1.0, direction: 1, minX: 2120, maxX: 2880,
+      hp: 6, maxHp: 6, color: "#6b21a8",
+      invincibleTimer: 0, alive: true,
+      velY: 0, onGround: false,
+      jumpTimer: 150, shootTimer: 120,
+    },
+  },
+];
+
+// =============================================================================
+// ACTIVE LEVEL STATE
+// =============================================================================
+
+let currentLevel = 0;
+let activePlatforms = [];
+let activeEnemies = [];
+let activeDecorations = [];
+let activePortal = null;
+let activeBoss = null;
+
+// Projectile & death effect state
+let projectiles = [];          // Active projectiles in flight
+let bossProjectiles = [];      // Boss blaster projectiles
+let deathEffects = [];         // Enemy death particle animations
+let shootCooldown = 0;         // Cooldown timer between shots
+
+// Transition state
+let transitionTimer = 0;      // Counts down during fade transitions
+let transitionPhase = "";      // "fadeOut" or "fadeIn"
+let nextLevelIndex = -1;       // Level to load during transition
+
+// Victory state
+let victoryScreen = false;
+
+/** Deep-copy an object (works for plain data) */
+function deepCopy(obj) {
+  return JSON.parse(JSON.stringify(obj));
+}
+
+/** Load a level by index, resetting all active state */
+function loadLevel(index) {
+  currentLevel = index;
+  const level = levels[index];
+
+  activePlatforms = level.platforms;     // Platforms don't mutate
+  activeDecorations = level.decorations; // Decorations don't mutate
+  activeEnemies = deepCopy(level.enemies);
+  activePortal = level.portal ? deepCopy(level.portal) : null;
+  activeBoss = level.boss ? deepCopy(level.boss) : null;
+
+  projectiles = [];
+  bossProjectiles = [];
+  deathEffects = [];
+  shootCooldown = 0;
+
+  player.reset();
+  camera.x = 0;
+  camera.y = 0;
+  victoryScreen = false;
+}
+
+/** Start a level transition (fade out → load → fade in) */
+function startTransition(toLevel) {
+  nextLevelIndex = toLevel;
+  transitionTimer = 60;  // 30 frames fade-out + 30 frames fade-in
+  transitionPhase = "fadeOut";
+}
+
+// =============================================================================
+// COLLISION DETECTION
+// =============================================================================
+
+/**
+ * Axis-Aligned Bounding Box (AABB) overlap check.
+ * Returns true if two rectangles overlap.
+ */
+function rectsOverlap(a, b) {
+  return (
+    a.x < b.x + b.width &&
+    a.x + a.width > b.x &&
+    a.y < b.y + b.height &&
+    a.y + a.height > b.y
+  );
+}
+
+/**
+ * Resolve collisions between the player and all platforms.
+ * Uses the player's velocity to determine which side they hit from.
+ */
+function handlePlatformCollisions() {
+  player.onGround = false;
+
+  for (const plat of activePlatforms) {
+    if (!rectsOverlap(player, plat)) continue;
+
+    // Calculate how far the player has penetrated into the platform from each side
+    const overlapBottom = (player.y + player.height) - plat.y;
+    const overlapTop = (plat.y + plat.height) - player.y;
+    const overlapRight = (player.x + player.width) - plat.x;
+    const overlapLeft = (plat.x + plat.width) - player.x;
+
+    // Find the smallest overlap — that's the side we should resolve
+    const minOverlap = Math.min(overlapBottom, overlapTop, overlapRight, overlapLeft);
+
+    if (minOverlap === overlapBottom && player.velY >= 0) {
+      // Landing on top of a platform
+      player.y = plat.y - player.height;
+      player.velY = 0;
+      player.onGround = true;
+    } else if (minOverlap === overlapTop && player.velY < 0) {
+      // Hitting the underside of a platform
+      player.y = plat.y + plat.height;
+      player.velY = 0;
+    } else if (minOverlap === overlapRight) {
+      // Hitting the left side of a platform
+      player.x = plat.x - player.width;
+      player.velX = 0;
+    } else if (minOverlap === overlapLeft) {
+      // Hitting the right side of a platform
+      player.x = plat.x + plat.width;
+      player.velX = 0;
+    }
+  }
+}
+
+// =============================================================================
+// ENEMY LOGIC
+// =============================================================================
+
+function updateEnemies() {
+  for (const enemy of activeEnemies) {
+    // Move in the current direction
+    enemy.x += enemy.speed * enemy.direction;
+
+    // Reverse when hitting patrol boundaries
+    if (enemy.x <= enemy.minX) {
+      enemy.x = enemy.minX;
+      enemy.direction = 1;
+    } else if (enemy.x + enemy.width >= enemy.maxX) {
+      enemy.x = enemy.maxX - enemy.width;
+      enemy.direction = -1;
+    }
+
+    // Check if the player is touching this enemy
+    if (rectsOverlap(player, enemy) && player.invincibleTimer === 0) {
+      damagePlayer(1);
+      return;
+    }
+  }
+}
+
+function drawEnemies() {
+  for (const enemy of activeEnemies) {
+    const screenX = enemy.x - camera.x;
+    const screenY = enemy.y - camera.y;
+
+    if (assets.enemy.loaded) {
+      // Draw enemy sprite, flipped based on patrol direction
+      ctx.save();
+      if (enemy.direction === -1) {
+        ctx.translate(screenX + enemy.width, screenY);
+        ctx.scale(-1, 1);
+        ctx.drawImage(assets.enemy.img, 0, 0, enemy.width, enemy.height);
+      } else {
+        ctx.drawImage(assets.enemy.img, screenX, screenY, enemy.width, enemy.height);
+      }
+      ctx.restore();
+    } else {
+      // Fallback: colored rectangle with angry face
+      ctx.fillStyle = enemy.color;
+      ctx.fillRect(screenX, screenY, enemy.width, enemy.height);
+      ctx.fillStyle = "white";
+      ctx.fillRect(screenX + 6, screenY + 10, 10, 10);
+      ctx.fillRect(screenX + 26, screenY + 10, 10, 10);
+      ctx.fillStyle = "#1a1a2e";
+      const pupilDir = enemy.direction === 1 ? 4 : 0;
+      ctx.fillRect(screenX + 6 + pupilDir, screenY + 14, 6, 6);
+      ctx.fillRect(screenX + 26 + pupilDir, screenY + 14, 6, 6);
+      ctx.fillStyle = "#1a1a2e";
+      if (enemy.direction === 1) {
+        ctx.fillRect(screenX + 6, screenY + 7, 10, 3);
+        ctx.fillRect(screenX + 29, screenY + 4, 7, 3);
+      } else {
+        ctx.fillRect(screenX + 6, screenY + 4, 7, 3);
+        ctx.fillRect(screenX + 26, screenY + 7, 10, 3);
+      }
+    }
+  }
+}
+
+// =============================================================================
+// BOSS LOGIC
+// =============================================================================
+
+function updateBoss() {
+  if (!activeBoss || !activeBoss.alive) return;
+
+  // Decrease invincibility timer
+  if (activeBoss.invincibleTimer > 0) {
+    activeBoss.invincibleTimer--;
+  }
+
+  // Speed increases as HP drops
+  const hpRatio = activeBoss.hp / activeBoss.maxHp;
+  const currentSpeed = activeBoss.speed * (1 + (1 - hpRatio) * 1.2);
+
+  // Patrol back and forth
+  activeBoss.x += currentSpeed * activeBoss.direction;
+
+  if (activeBoss.x <= activeBoss.minX) {
+    activeBoss.x = activeBoss.minX;
+    activeBoss.direction = 1;
+  } else if (activeBoss.x + activeBoss.width >= activeBoss.maxX) {
+    activeBoss.x = activeBoss.maxX - activeBoss.width;
+    activeBoss.direction = -1;
+  }
+
+  // ---- Gravity & vertical movement ----
+  activeBoss.velY += GRAVITY;
+  if (activeBoss.velY > MAX_FALL_SPEED) activeBoss.velY = MAX_FALL_SPEED;
+  activeBoss.y += activeBoss.velY;
+  activeBoss.onGround = false;
+
+  // Boss platform collisions
+  for (const plat of activePlatforms) {
+    if (!rectsOverlap(activeBoss, plat)) continue;
+    const overlapBottom = (activeBoss.y + activeBoss.height) - plat.y;
+    const overlapTop = (plat.y + plat.height) - activeBoss.y;
+    if (overlapBottom < overlapTop && activeBoss.velY >= 0) {
+      activeBoss.y = plat.y - activeBoss.height;
+      activeBoss.velY = 0;
+      activeBoss.onGround = true;
+    }
+  }
+
+  // ---- Occasional jumping ----
+  activeBoss.jumpTimer--;
+  if (activeBoss.jumpTimer <= 0 && activeBoss.onGround) {
+    activeBoss.velY = BOSS_JUMP_FORCE;
+    activeBoss.onGround = false;
+    activeBoss.jumpTimer = BOSS_JUMP_INTERVAL_MIN +
+      Math.floor(Math.random() * (BOSS_JUMP_INTERVAL_MAX - BOSS_JUMP_INTERVAL_MIN));
+  }
+
+  // ---- Occasional shooting ----
+  activeBoss.shootTimer--;
+  if (activeBoss.shootTimer <= 0) {
+    // Fire a red blaster toward the player
+    const bx = activeBoss.x + activeBoss.width / 2;
+    const by = activeBoss.y + activeBoss.height / 2;
+    const dx = player.x + player.width / 2 - bx;
+    const dy = player.y + player.height / 2 - by;
+    const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+    bossProjectiles.push({
+      x: bx - 4,
+      y: by - 4,
+      velX: (dx / dist) * BOSS_BLASTER_SPEED,
+      velY: (dy / dist) * BOSS_BLASTER_SPEED,
+      age: 0,
+    });
+    activeBoss.shootTimer = BOSS_SHOOT_INTERVAL_MIN +
+      Math.floor(Math.random() * (BOSS_SHOOT_INTERVAL_MAX - BOSS_SHOOT_INTERVAL_MIN));
+  }
+
+  // Check collision with player
+  if (rectsOverlap(player, activeBoss)) {
+    if (activeBoss.invincibleTimer > 0) {
+      return;
+    }
+
+    // Stomp check: player is falling and their bottom is near the boss's top
+    const playerBottom = player.y + player.height;
+    const bossTop = activeBoss.y;
+    const stompZone = 20;
+
+    if (player.velY > 0 && playerBottom - bossTop < stompZone) {
+      // Successful stomp!
+      activeBoss.hp--;
+      activeBoss.invincibleTimer = 60;
+      player.velY = JUMP_FORCE * 0.7;
+
+      if (activeBoss.hp <= 0) {
+        activeBoss.alive = false;
+        victoryScreen = true;
+      }
+    } else if (player.invincibleTimer === 0) {
+      damagePlayer(1);
+    }
+  }
+}
+
+// =============================================================================
+// BOSS PROJECTILE LOGIC
+// =============================================================================
+
+function updateBossProjectiles() {
+  for (let i = bossProjectiles.length - 1; i >= 0; i--) {
+    const bp = bossProjectiles[i];
+    bp.age++;
+    bp.x += bp.velX;
+    bp.y += bp.velY;
+
+    // Remove if off-screen
+    if (bp.x < camera.x - 50 || bp.x > camera.x + canvas.width + 50 ||
+        bp.y < -50 || bp.y > canvas.height + 50) {
+      bossProjectiles.splice(i, 1);
+      continue;
+    }
+
+    // Check collision with player
+    if (player.invincibleTimer === 0 && rectsOverlap(
+      { x: bp.x, y: bp.y, width: 8, height: 8 },
+      player
+    )) {
+      damagePlayer(1);
+      bossProjectiles.splice(i, 1);
+    }
+  }
+}
+
+function drawBossProjectiles() {
+  for (const bp of bossProjectiles) {
+    const screenX = bp.x - camera.x;
+    const screenY = bp.y - camera.y;
+    const cx = screenX + 4;
+    const cy = screenY + 4;
+
+    // Red glow
+    ctx.save();
+    ctx.globalAlpha = 0.3;
+    ctx.fillStyle = "#dc2626";
+    ctx.beginPath();
+    ctx.ellipse(cx, cy, 8, 8, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+
+    // Red blaster body
+    ctx.fillStyle = "#dc2626";
+    ctx.beginPath();
+    ctx.arc(cx, cy, 4, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Bright core
+    ctx.fillStyle = "#fca5a5";
+    ctx.beginPath();
+    ctx.arc(cx, cy, 2, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+function drawBoss() {
+  if (!activeBoss || !activeBoss.alive) return;
+
+  const screenX = activeBoss.x - camera.x;
+  const screenY = activeBoss.y - camera.y;
+
+  // Flash during invincibility (skip drawing every other frame)
+  if (activeBoss.invincibleTimer > 0 && Math.floor(activeBoss.invincibleTimer / 4) % 2 === 0) {
+    // Draw health bar even when flashing
+    drawBossHealthBar(screenX, screenY);
+    return;
+  }
+
+  if (assets.boss.loaded) {
+    ctx.save();
+    if (activeBoss.direction === -1) {
+      ctx.translate(screenX + activeBoss.width, screenY);
+      ctx.scale(-1, 1);
+      ctx.drawImage(assets.boss.img, 0, 0, activeBoss.width, activeBoss.height);
+    } else {
+      ctx.drawImage(assets.boss.img, screenX, screenY, activeBoss.width, activeBoss.height);
+    }
+    ctx.restore();
+  } else {
+    // Fallback: large purple rectangle with menacing face
+    ctx.fillStyle = activeBoss.color;
+    ctx.fillRect(screenX, screenY, activeBoss.width, activeBoss.height);
+
+    // Eyes
+    ctx.fillStyle = "#fbbf24";
+    ctx.fillRect(screenX + 12, screenY + 20, 18, 18);
+    ctx.fillRect(screenX + 50, screenY + 20, 18, 18);
+    // Pupils
+    ctx.fillStyle = "#dc2626";
+    const pupilDir = activeBoss.direction === 1 ? 8 : 0;
+    ctx.fillRect(screenX + 12 + pupilDir, screenY + 26, 10, 10);
+    ctx.fillRect(screenX + 50 + pupilDir, screenY + 26, 10, 10);
+    // Angry brows
+    ctx.fillStyle = "#1a1a2e";
+    if (activeBoss.direction === 1) {
+      ctx.fillRect(screenX + 10, screenY + 14, 20, 5);
+      ctx.fillRect(screenX + 55, screenY + 10, 15, 5);
+    } else {
+      ctx.fillRect(screenX + 10, screenY + 10, 15, 5);
+      ctx.fillRect(screenX + 50, screenY + 14, 20, 5);
+    }
+    // Mouth
+    ctx.fillStyle = "#dc2626";
+    ctx.fillRect(screenX + 20, screenY + 60, 40, 12);
+    ctx.fillStyle = "white";
+    // Teeth
+    for (let t = 0; t < 4; t++) {
+      ctx.fillRect(screenX + 22 + t * 10, screenY + 60, 6, 6);
+    }
+  }
+
+  drawBossHealthBar(screenX, screenY);
+}
+
+function drawBossHealthBar(screenX, screenY) {
+  if (!activeBoss) return;
+  const barWidth = activeBoss.width;
+  const barHeight = 8;
+  const barY = screenY - 16;
+
+  // Background
+  ctx.fillStyle = "#333";
+  ctx.fillRect(screenX, barY, barWidth, barHeight);
+  // Health fill
+  const fillWidth = (activeBoss.hp / activeBoss.maxHp) * barWidth;
+  ctx.fillStyle = activeBoss.hp <= 1 ? "#dc2626" : "#ef4444";
+  ctx.fillRect(screenX, barY, fillWidth, barHeight);
+  // Border
+  ctx.strokeStyle = "#111";
+  ctx.lineWidth = 1;
+  ctx.strokeRect(screenX, barY, barWidth, barHeight);
+}
+
+// =============================================================================
+// PORTAL LOGIC
+// =============================================================================
+
+let portalAnimTimer = 0;
+
+function updatePortal() {
+  if (!activePortal) return;
+  portalAnimTimer += 0.05;
+
+  // Check if player overlaps portal
+  if (rectsOverlap(player, activePortal) && transitionTimer === 0) {
+    startTransition(currentLevel + 1);
+  }
+}
+
+function drawPortal() {
+  if (!activePortal) return;
+
+  const screenX = activePortal.x - camera.x;
+  const screenY = activePortal.y - camera.y;
+  const pulse = Math.sin(portalAnimTimer) * 0.3 + 0.7; // Oscillates between 0.4 and 1.0
+
+  // Glow effect
+  ctx.save();
+  ctx.globalAlpha = pulse * 0.4;
+  ctx.fillStyle = "#a78bfa";
+  ctx.beginPath();
+  ctx.ellipse(
+    screenX + activePortal.width / 2,
+    screenY + activePortal.height / 2,
+    activePortal.width / 2 + 12,
+    activePortal.height / 2 + 12,
+    0, 0, Math.PI * 2
+  );
+  ctx.fill();
+  ctx.globalAlpha = 1;
+  ctx.restore();
+
+  if (assets.portal.loaded) {
+    ctx.save();
+    ctx.globalAlpha = 0.7 + pulse * 0.3;
+    ctx.drawImage(assets.portal.img, screenX, screenY, activePortal.width, activePortal.height);
+    ctx.restore();
+  } else {
+    // Fallback: glowing oval
+    ctx.save();
+    ctx.globalAlpha = 0.7 + pulse * 0.3;
+
+    // Outer ring
+    ctx.strokeStyle = "#c084fc";
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.ellipse(
+      screenX + activePortal.width / 2,
+      screenY + activePortal.height / 2,
+      activePortal.width / 2,
+      activePortal.height / 2,
+      0, 0, Math.PI * 2
+    );
+    ctx.stroke();
+
+    // Inner fill
+    const gradient = ctx.createRadialGradient(
+      screenX + activePortal.width / 2, screenY + activePortal.height / 2, 5,
+      screenX + activePortal.width / 2, screenY + activePortal.height / 2, activePortal.width / 2
+    );
+    gradient.addColorStop(0, "rgba(167, 139, 250, 0.8)");
+    gradient.addColorStop(0.6, "rgba(139, 92, 246, 0.5)");
+    gradient.addColorStop(1, "rgba(109, 40, 217, 0.1)");
+    ctx.fillStyle = gradient;
+    ctx.fill();
+
+    ctx.restore();
+  }
+}
+
+// =============================================================================
+// PROJECTILE LOGIC
+// =============================================================================
+
+function updateProjectiles() {
+  for (let i = projectiles.length - 1; i >= 0; i--) {
+    const p = projectiles[i];
+    p.age++;
+
+    // Store trail position (last 3 positions)
+    p.trail.push({ x: p.x, y: p.y });
+    if (p.trail.length > 3) p.trail.shift();
+
+    // Move with sine-wave wobble on Y axis
+    p.x += p.velX;
+    p.y += Math.sin(p.age * 0.3) * 2;
+
+    // Remove if too far from player
+    if (Math.abs(p.x - player.x) > 600) {
+      projectiles.splice(i, 1);
+      continue;
+    }
+
+    // Check collision with enemies
+    let hit = false;
+    for (let e = activeEnemies.length - 1; e >= 0; e--) {
+      const enemy = activeEnemies[e];
+      if (rectsOverlap(
+        { x: p.x, y: p.y, width: PROJECTILE_SIZE, height: PROJECTILE_SIZE },
+        enemy
+      )) {
+        spawnDeathEffect(enemy);
+        activeEnemies.splice(e, 1);
+        projectiles.splice(i, 1);
+        hit = true;
+        break;
+      }
+    }
+    if (hit) continue;
+
+    // Check collision with boss
+    if (activeBoss && activeBoss.alive && activeBoss.invincibleTimer === 0) {
+      if (rectsOverlap(
+        { x: p.x, y: p.y, width: PROJECTILE_SIZE, height: PROJECTILE_SIZE },
+        activeBoss
+      )) {
+        activeBoss.hp--;
+        activeBoss.invincibleTimer = 60;
+        projectiles.splice(i, 1);
+
+        if (activeBoss.hp <= 0) {
+          activeBoss.alive = false;
+          victoryScreen = true;
+        }
+      }
+    }
+  }
+}
+
+function drawProjectiles() {
+  const laserLen = 22;
+  const laserH = 6;
+
+  for (const p of projectiles) {
+    const screenX = p.x - camera.x;
+    const screenY = p.y - camera.y;
+    const cx = screenX + PROJECTILE_SIZE / 2;
+    const cy = screenY + PROJECTILE_SIZE / 2;
+
+    // Trail: fading laser afterimages
+    for (let t = 0; t < p.trail.length; t++) {
+      const tr = p.trail[t];
+      const trCx = tr.x - camera.x + PROJECTILE_SIZE / 2;
+      const trCy = tr.y - camera.y + PROJECTILE_SIZE / 2;
+      const alpha = (t + 1) / (p.trail.length + 1) * 0.3;
+
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      ctx.fillStyle = "#fbbf24";
+      ctx.fillRect(trCx - laserLen / 2, trCy - laserH / 4, laserLen, laserH / 2);
+      ctx.restore();
+    }
+
+    // Outer glow
+    ctx.save();
+    ctx.globalAlpha = 0.3;
+    ctx.fillStyle = "#fbbf24";
+    ctx.beginPath();
+    ctx.ellipse(cx, cy, laserLen / 2 + 4, laserH / 2 + 4, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+
+    // Laser body (golden)
+    ctx.fillStyle = "#fbbf24";
+    const r = laserH / 2;
+    ctx.beginPath();
+    ctx.moveTo(cx - laserLen / 2 + r, cy - r);
+    ctx.lineTo(cx + laserLen / 2 - r, cy - r);
+    ctx.arc(cx + laserLen / 2 - r, cy, r, -Math.PI / 2, Math.PI / 2);
+    ctx.lineTo(cx - laserLen / 2 + r, cy + r);
+    ctx.arc(cx - laserLen / 2 + r, cy, r, Math.PI / 2, -Math.PI / 2);
+    ctx.closePath();
+    ctx.fill();
+
+    // Bright white core
+    ctx.fillStyle = "white";
+    const coreH = laserH * 0.35;
+    const cr = coreH / 2;
+    ctx.beginPath();
+    ctx.moveTo(cx - laserLen / 3 + cr, cy - cr);
+    ctx.lineTo(cx + laserLen / 3 - cr, cy - cr);
+    ctx.arc(cx + laserLen / 3 - cr, cy, cr, -Math.PI / 2, Math.PI / 2);
+    ctx.lineTo(cx - laserLen / 3 + cr, cy + cr);
+    ctx.arc(cx - laserLen / 3 + cr, cy, cr, Math.PI / 2, -Math.PI / 2);
+    ctx.closePath();
+    ctx.fill();
+  }
+}
+
+// =============================================================================
+// ENEMY DEATH EFFECT
+// =============================================================================
+
+function spawnDeathEffect(enemy) {
+  const w = enemy.width;
+  const h = enemy.height;
+  const variant = Math.floor(Math.random() * 3);
+  let pieces;
+
+  if (variant === 0) {
+    // 3 pieces: vertical strips
+    const pw = w / 3;
+    pieces = [
+      // left strip — flies left
+      { x: enemy.x, y: enemy.y, pw: pw, ph: h,
+        sfx: 0, sfy: 0, sfw: 1/3, sfh: 1,
+        velX: -(3 + Math.random() * 2), velY: -(3 + Math.random() * 3),
+        rot: 0, rotSpeed: -(0.1 + Math.random() * 0.2) },
+      // middle strip — flies up
+      { x: enemy.x + pw, y: enemy.y, pw: pw, ph: h,
+        sfx: 1/3, sfy: 0, sfw: 1/3, sfh: 1,
+        velX: (Math.random() - 0.5) * 2, velY: -(5 + Math.random() * 3),
+        rot: 0, rotSpeed: (Math.random() - 0.5) * 0.3 },
+      // right strip — flies right
+      { x: enemy.x + pw * 2, y: enemy.y, pw: pw, ph: h,
+        sfx: 2/3, sfy: 0, sfw: 1/3, sfh: 1,
+        velX: 3 + Math.random() * 2, velY: -(3 + Math.random() * 3),
+        rot: 0, rotSpeed: 0.1 + Math.random() * 0.2 },
+    ];
+  } else if (variant === 1) {
+    // 4 pieces: quadrants
+    const hw = w / 2;
+    const hh = h / 2;
+    pieces = [
+      { x: enemy.x, y: enemy.y, pw: hw, ph: hh,
+        sfx: 0, sfy: 0, sfw: 0.5, sfh: 0.5,
+        velX: -(3 + Math.random() * 2), velY: -(4 + Math.random() * 2),
+        rot: 0, rotSpeed: -(0.1 + Math.random() * 0.2) },
+      { x: enemy.x + hw, y: enemy.y, pw: hw, ph: hh,
+        sfx: 0.5, sfy: 0, sfw: 0.5, sfh: 0.5,
+        velX: 3 + Math.random() * 2, velY: -(4 + Math.random() * 2),
+        rot: 0, rotSpeed: 0.1 + Math.random() * 0.2 },
+      { x: enemy.x, y: enemy.y + hh, pw: hw, ph: hh,
+        sfx: 0, sfy: 0.5, sfw: 0.5, sfh: 0.5,
+        velX: -(3 + Math.random() * 2), velY: -(1 + Math.random() * 2),
+        rot: 0, rotSpeed: -(0.1 + Math.random() * 0.2) },
+      { x: enemy.x + hw, y: enemy.y + hh, pw: hw, ph: hh,
+        sfx: 0.5, sfy: 0.5, sfw: 0.5, sfh: 0.5,
+        velX: 3 + Math.random() * 2, velY: -(1 + Math.random() * 2),
+        rot: 0, rotSpeed: 0.1 + Math.random() * 0.2 },
+    ];
+  } else {
+    // 5 pieces: cross pattern (top, left, center, right, bottom)
+    const tw = w / 3;
+    const th = h / 3;
+    pieces = [
+      // top — flies up
+      { x: enemy.x + tw, y: enemy.y, pw: tw, ph: th,
+        sfx: 1/3, sfy: 0, sfw: 1/3, sfh: 1/3,
+        velX: (Math.random() - 0.5) * 3, velY: -(6 + Math.random() * 2),
+        rot: 0, rotSpeed: (Math.random() - 0.5) * 0.3 },
+      // left — flies left
+      { x: enemy.x, y: enemy.y + th, pw: tw, ph: th,
+        sfx: 0, sfy: 1/3, sfw: 1/3, sfh: 1/3,
+        velX: -(4 + Math.random() * 2), velY: -(2 + Math.random() * 2),
+        rot: 0, rotSpeed: -(0.15 + Math.random() * 0.2) },
+      // center — flies straight up
+      { x: enemy.x + tw, y: enemy.y + th, pw: tw, ph: th,
+        sfx: 1/3, sfy: 1/3, sfw: 1/3, sfh: 1/3,
+        velX: (Math.random() - 0.5) * 2, velY: -(5 + Math.random() * 3),
+        rot: 0, rotSpeed: (Math.random() - 0.5) * 0.4 },
+      // right — flies right
+      { x: enemy.x + tw * 2, y: enemy.y + th, pw: tw, ph: th,
+        sfx: 2/3, sfy: 1/3, sfw: 1/3, sfh: 1/3,
+        velX: 4 + Math.random() * 2, velY: -(2 + Math.random() * 2),
+        rot: 0, rotSpeed: 0.15 + Math.random() * 0.2 },
+      // bottom — pops up slightly
+      { x: enemy.x + tw, y: enemy.y + th * 2, pw: tw, ph: th,
+        sfx: 1/3, sfy: 2/3, sfw: 1/3, sfh: 1/3,
+        velX: (Math.random() - 0.5) * 3, velY: -(1 + Math.random() * 2),
+        rot: 0, rotSpeed: (Math.random() - 0.5) * 0.3 },
+    ];
+  }
+
+  deathEffects.push({
+    width: w,
+    height: h,
+    color: enemy.color,
+    direction: enemy.direction,
+    pieces: pieces,
+    timer: 45,
+    maxTimer: 45,
+  });
+}
+
+function updateDeathEffects() {
+  for (let i = deathEffects.length - 1; i >= 0; i--) {
+    const eff = deathEffects[i];
+    eff.timer--;
+
+    for (const piece of eff.pieces) {
+      piece.x += piece.velX;
+      piece.y += piece.velY;
+      piece.velY += GRAVITY * 0.8; // Gravity on pieces
+      piece.rot += piece.rotSpeed;
+    }
+
+    if (eff.timer <= 0) {
+      deathEffects.splice(i, 1);
+    }
+  }
+}
+
+function drawDeathEffects() {
+  for (const eff of deathEffects) {
+    const alpha = eff.timer < 15 ? eff.timer / 15 : 1;
+
+    for (const piece of eff.pieces) {
+      const screenX = piece.x - camera.x;
+      const screenY = piece.y - camera.y;
+
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      ctx.translate(screenX + piece.pw / 2, screenY + piece.ph / 2);
+      ctx.rotate(piece.rot);
+
+      if (assets.enemy.loaded) {
+        const img = assets.enemy.img;
+
+        ctx.save();
+        if (eff.direction === -1) {
+          ctx.scale(-1, 1);
+        }
+        ctx.drawImage(
+          img,
+          piece.sfx * img.width,              // source x
+          piece.sfy * img.height,             // source y
+          piece.sfw * img.width,              // source width
+          piece.sfh * img.height,             // source height
+          -piece.pw / 2, -piece.ph / 2,      // dest position (centered)
+          piece.pw, piece.ph                  // dest size
+        );
+        ctx.restore();
+      } else {
+        ctx.fillStyle = eff.color;
+        ctx.fillRect(-piece.pw / 2, -piece.ph / 2, piece.pw, piece.ph);
+      }
+
+      ctx.restore();
+    }
+  }
+}
+
+// =============================================================================
+// DEATH & RESTART
+// =============================================================================
+
+let deathMessage = "";
+let deathTimer = 0;
+
+function damagePlayer(amount) {
+  if (transitionTimer > 0 || victoryScreen) return;
+  if (player.invincibleTimer > 0) return;
+
+  player.hp -= amount;
+  player.invincibleTimer = PLAYER_INVINCIBLE_TIME;
+  player.hpBarTimer = PLAYER_HP_BAR_DURATION;
+
+  if (player.hp <= 0) {
+    player.hp = 0;
+    die();
+  }
+}
+
+function die() {
+  if (transitionTimer > 0 || victoryScreen) return;
+  deathMessage = "You died! Restarting...";
+  deathTimer = 90;
+  loadLevel(currentLevel);
+}
+
+// =============================================================================
+// TRANSITION LOGIC
+// =============================================================================
+
+function updateTransition() {
+  if (transitionTimer <= 0) return;
+
+  transitionTimer--;
+
+  if (transitionPhase === "fadeOut" && transitionTimer === 30) {
+    // Midpoint: load the next level
+    loadLevel(nextLevelIndex);
+    transitionPhase = "fadeIn";
+  }
+
+  if (transitionTimer === 0) {
+    transitionPhase = "";
+  }
+}
+
+function drawTransition() {
+  if (transitionTimer <= 0) return;
+
+  let alpha;
+  if (transitionPhase === "fadeOut") {
+    // Fading out: alpha goes from 0 to 1 over 30 frames
+    alpha = 1 - (transitionTimer - 30) / 30;
+  } else {
+    // Fading in: alpha goes from 1 to 0 over 30 frames
+    alpha = transitionTimer / 30;
+  }
+
+  ctx.fillStyle = `rgba(0, 0, 0, ${alpha})`;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+}
+
+// =============================================================================
+// DRAWING HELPERS
+// =============================================================================
+
+/**
+ * Draw the background using the current level's background image.
+ * The image tiles horizontally and scrolls with a parallax factor so it
+ * moves slower than the foreground, creating depth. Falls back to a
+ * gradient if the image didn't load.
+ */
+const BG_PARALLAX = 0.25; // Background scrolls at 25% of camera speed
+
+function drawBackground() {
+  const bgKey = levels[currentLevel].backgroundKey;
+  const bgAsset = assets[bgKey];
+
+  if (bgAsset && bgAsset.loaded) {
+    const bgImg = bgAsset.img;
+
+    // Scale the image to fill the canvas height, preserving aspect ratio
+    const scale = canvas.height / bgImg.height;
+    const bgWidth = bgImg.width * scale;
+    const bgHeight = canvas.height;
+
+    // Calculate the parallax offset and wrap it so the image tiles seamlessly
+    const offset = -(camera.x * BG_PARALLAX) % bgWidth;
+
+    // Draw enough copies to cover the full canvas width
+    // Start one bgWidth to the left to handle the wrap-around
+    for (let x = offset - bgWidth; x < canvas.width; x += bgWidth) {
+      ctx.drawImage(bgImg, x, 0, bgWidth, bgHeight);
+    }
+  } else {
+    // Fallback: sky gradient (different per level)
+    const gradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
+    if (currentLevel === 1) {
+      // Dark cave gradient
+      gradient.addColorStop(0, "#1a1a2e");
+      gradient.addColorStop(1, "#2d1b4e");
+    } else {
+      gradient.addColorStop(0, "#87ceeb");
+      gradient.addColorStop(1, SKY_COLOR);
+    }
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+  }
+}
+
+/** Draw background decorations with parallax scrolling */
+function drawDecorations() {
+  for (const dec of activeDecorations) {
+    // Parallax: decorations scroll slower than the foreground
+    const screenX = dec.x - camera.x * dec.parallax;
+    const screenY = dec.y;
+    ctx.fillStyle = dec.color;
+
+    if (dec.type === "stalactite") {
+      // Stalactite: triangle hanging from ceiling
+      ctx.beginPath();
+      ctx.moveTo(screenX, screenY);
+      ctx.lineTo(screenX + dec.width, screenY);
+      ctx.lineTo(screenX + dec.width / 2, screenY + dec.height);
+      ctx.closePath();
+      ctx.fill();
+    } else if (dec.type === "crystal") {
+      // Crystal: diamond shape with glow
+      const cx = screenX + dec.width / 2;
+      const cy = screenY + dec.height / 2;
+      // Glow
+      ctx.save();
+      ctx.globalAlpha = 0.3 + Math.sin(portalAnimTimer * 2 + dec.x) * 0.2;
+      ctx.fillStyle = dec.color;
+      ctx.beginPath();
+      ctx.ellipse(cx, cy, dec.width, dec.height, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.globalAlpha = 1;
+      ctx.restore();
+      // Diamond
+      ctx.fillStyle = dec.color;
+      ctx.beginPath();
+      ctx.moveTo(cx, screenY);
+      ctx.lineTo(screenX + dec.width, cy);
+      ctx.lineTo(cx, screenY + dec.height);
+      ctx.lineTo(screenX, cy);
+      ctx.closePath();
+      ctx.fill();
+    } else if (dec.y < 150) {
+      // Cloud: draw a rounded blob
+      ctx.beginPath();
+      ctx.ellipse(
+        screenX + dec.width / 2,
+        screenY + dec.height / 2,
+        dec.width / 2,
+        dec.height / 2,
+        0, 0, Math.PI * 2
+      );
+      ctx.fill();
+    } else {
+      // Bush: simple rounded rectangle
+      const r = 10;
+      ctx.beginPath();
+      ctx.moveTo(screenX + r, screenY);
+      ctx.lineTo(screenX + dec.width - r, screenY);
+      ctx.quadraticCurveTo(screenX + dec.width, screenY, screenX + dec.width, screenY + r);
+      ctx.lineTo(screenX + dec.width, screenY + dec.height);
+      ctx.lineTo(screenX, screenY + dec.height);
+      ctx.lineTo(screenX, screenY + r);
+      ctx.quadraticCurveTo(screenX, screenY, screenX + r, screenY);
+      ctx.fill();
+    }
+  }
+}
+
+function drawPlatforms() {
+  for (const plat of activePlatforms) {
+    const screenX = plat.x - camera.x;
+    const screenY = plat.y - camera.y;
+
+    // Skip platforms entirely off-screen for performance
+    if (screenX + plat.width < 0 || screenX > canvas.width) continue;
+
+    ctx.fillStyle = plat.color;
+    ctx.fillRect(screenX, screenY, plat.width, plat.height);
+
+    if (currentLevel === 0) {
+      // Level 1: maroon/crimson theme
+      if (plat.height <= 20) {
+        ctx.fillStyle = "#a85555";
+        ctx.fillRect(screenX, screenY, plat.width, 4);
+      } else {
+        ctx.fillStyle = "#8b4040";
+        ctx.fillRect(screenX, screenY, plat.width, 6);
+      }
+    } else {
+      // Level 2: cave/brown theme
+      if (plat.height <= 20) {
+        ctx.fillStyle = "#8b6f54";
+        ctx.fillRect(screenX, screenY, plat.width, 4);
+      } else {
+        ctx.fillStyle = "#7a6652";
+        ctx.fillRect(screenX, screenY, plat.width, 6);
+      }
+    }
+  }
+}
+
+/** Draw the HUD (level indicator, death message, controls hint) */
+function drawHUD() {
+  // Death message
+  if (deathTimer > 0) {
+    deathTimer--;
+    ctx.fillStyle = "rgba(0, 0, 0, 0.5)";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = "#ff6b6b";
+    ctx.font = "bold 28px monospace";
+    ctx.textAlign = "center";
+    ctx.fillText(deathMessage, canvas.width / 2, canvas.height / 2);
+    ctx.textAlign = "left";
+  }
+
+  // Victory screen
+  if (victoryScreen) {
+    ctx.fillStyle = "rgba(0, 0, 0, 0.6)";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    ctx.fillStyle = "#fbbf24";
+    ctx.font = "bold 40px monospace";
+    ctx.textAlign = "center";
+    ctx.fillText("You Win!", canvas.width / 2, canvas.height / 2 - 20);
+
+    ctx.fillStyle = "white";
+    ctx.font = "20px monospace";
+    ctx.fillText("Press R to Restart", canvas.width / 2, canvas.height / 2 + 30);
+    ctx.textAlign = "left";
+  }
+
+  // Level indicator (top-right)
+  ctx.fillStyle = "rgba(0, 0, 0, 0.4)";
+  ctx.fillRect(canvas.width - 100, 8, 92, 28);
+  ctx.fillStyle = "white";
+  ctx.font = "bold 14px monospace";
+  ctx.textAlign = "right";
+  ctx.fillText(`Level ${currentLevel + 1}`, canvas.width - 16, 27);
+  ctx.textAlign = "left";
+
+  // Controls hint (top-left)
+  ctx.fillStyle = "rgba(0, 0, 0, 0.4)";
+  ctx.fillRect(8, 8, 340, 28);
+  ctx.fillStyle = "white";
+  ctx.font = "13px monospace";
+  ctx.fillText("Arrows: Move | Up/Space: Jump | Shift: Shoot", 14, 27);
+
+  // Player health bar (only visible after being hit, fades out)
+  if (player.hpBarTimer > 0) {
+    const barWidth = 80;
+    const barHeight = 6;
+    const screenX = player.x - camera.x + (player.width - barWidth) / 2;
+    const screenY = player.y - camera.y - 14;
+
+    // Fade out over the last 60 frames
+    const alpha = player.hpBarTimer < 60 ? player.hpBarTimer / 60 : 1;
+
+    ctx.save();
+    ctx.globalAlpha = alpha;
+
+    // Background
+    ctx.fillStyle = "#333";
+    ctx.fillRect(screenX, screenY, barWidth, barHeight);
+    // Health fill
+    const fillWidth = (player.hp / player.maxHp) * barWidth;
+    ctx.fillStyle = player.hp <= player.maxHp * 0.25 ? "#dc2626" :
+                    player.hp <= player.maxHp * 0.5 ? "#f59e0b" : "#22c55e";
+    ctx.fillRect(screenX, screenY, fillWidth, barHeight);
+    // Border
+    ctx.strokeStyle = "#111";
+    ctx.lineWidth = 1;
+    ctx.strokeRect(screenX, screenY, barWidth, barHeight);
+
+    ctx.restore();
+  }
+}
+
+// =============================================================================
+// RESTART (R key for victory screen)
+// =============================================================================
+
+window.addEventListener("keydown", (e) => {
+  if (e.code === "KeyR" && victoryScreen) {
+    loadLevel(0);
+  }
+});
+
+// =============================================================================
+// MAIN GAME LOOP
+// =============================================================================
+
+function gameLoop() {
+  // 1. Update game state
+  updateTransition();
+
+  if (transitionTimer === 0 && !victoryScreen) {
+    player.update();
+    handlePlatformCollisions();
+    updateEnemies();
+    updateBoss();
+    updateBossProjectiles();
+    updateProjectiles();
+    updateDeathEffects();
+    updatePortal();
+  }
+
+  camera.follow(player);
+
+  // 2. Draw everything (order matters: back to front)
+  drawBackground();
+  drawDecorations();
+  drawPlatforms();
+  drawPortal();
+  drawEnemies();
+  drawBoss();
+  drawBossProjectiles();
+  drawProjectiles();
+  drawDeathEffects();
+  player.draw();
+  drawHUD();
+  drawTransition();
+
+  // 3. Request the next frame
+  requestAnimationFrame(gameLoop);
+}
+
+// Load assets, then start the game
+loadAllAssets();
+  </script>
+</body>
+</html>
