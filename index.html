@@ -514,8 +514,8 @@ const levels = [
     ],
     portal: null,
     boss: {
-      x: 2350, y: 354, width: 80, height: 96,
-      speed: 1.0, direction: 1, minX: 2120, maxX: 2880,
+      x: 2350, y: 258, width: 160, height: 192,
+      speed: 0.6, direction: 1, minX: 2120, maxX: 2880,
       hp: 6, maxHp: 6, color: "#6b21a8",
       invincibleTimer: 0, alive: true,
       velY: 0, onGround: false,
@@ -1460,35 +1460,41 @@ function drawBoss() {
     }
     ctx.restore();
   } else {
-    // Fallback: large purple rectangle with menacing face
+    // Fallback: large purple rectangle with menacing face (scales with boss size)
+    const bw = activeBoss.width;
+    const bh = activeBoss.height;
     ctx.fillStyle = activeBoss.color;
-    ctx.fillRect(screenX, screenY, activeBoss.width, activeBoss.height);
+    ctx.fillRect(screenX, screenY, bw, bh);
 
     // Eyes
     ctx.fillStyle = "#fbbf24";
-    ctx.fillRect(screenX + 12, screenY + 20, 18, 18);
-    ctx.fillRect(screenX + 50, screenY + 20, 18, 18);
+    const eyeW = bw * 0.225, eyeH = bh * 0.094;
+    const eyeY = screenY + bh * 0.104;
+    ctx.fillRect(screenX + bw * 0.15, eyeY, eyeW, eyeH);
+    ctx.fillRect(screenX + bw * 0.625, eyeY, eyeW, eyeH);
     // Pupils
     ctx.fillStyle = "#dc2626";
-    const pupilDir = activeBoss.direction === 1 ? 8 : 0;
-    ctx.fillRect(screenX + 12 + pupilDir, screenY + 26, 10, 10);
-    ctx.fillRect(screenX + 50 + pupilDir, screenY + 26, 10, 10);
+    const pupilW = bw * 0.125, pupilH = bh * 0.052;
+    const pupilDir = activeBoss.direction === 1 ? bw * 0.1 : 0;
+    ctx.fillRect(screenX + bw * 0.15 + pupilDir, eyeY + eyeH * 0.33, pupilW, pupilH);
+    ctx.fillRect(screenX + bw * 0.625 + pupilDir, eyeY + eyeH * 0.33, pupilW, pupilH);
     // Angry brows
     ctx.fillStyle = "#1a1a2e";
     if (activeBoss.direction === 1) {
-      ctx.fillRect(screenX + 10, screenY + 14, 20, 5);
-      ctx.fillRect(screenX + 55, screenY + 10, 15, 5);
+      ctx.fillRect(screenX + bw * 0.125, screenY + bh * 0.073, bw * 0.25, bh * 0.026);
+      ctx.fillRect(screenX + bw * 0.69, screenY + bh * 0.052, bw * 0.19, bh * 0.026);
     } else {
-      ctx.fillRect(screenX + 10, screenY + 10, 15, 5);
-      ctx.fillRect(screenX + 50, screenY + 14, 20, 5);
+      ctx.fillRect(screenX + bw * 0.125, screenY + bh * 0.052, bw * 0.19, bh * 0.026);
+      ctx.fillRect(screenX + bw * 0.625, screenY + bh * 0.073, bw * 0.25, bh * 0.026);
     }
     // Mouth
     ctx.fillStyle = "#dc2626";
-    ctx.fillRect(screenX + 20, screenY + 60, 40, 12);
+    const mouthY = screenY + bh * 0.3125;
+    ctx.fillRect(screenX + bw * 0.25, mouthY, bw * 0.5, bh * 0.0625);
     ctx.fillStyle = "white";
     // Teeth
     for (let t = 0; t < 4; t++) {
-      ctx.fillRect(screenX + 22 + t * 10, screenY + 60, 6, 6);
+      ctx.fillRect(screenX + bw * 0.275 + t * bw * 0.125, mouthY, bw * 0.075, bh * 0.03);
     }
   }
 
