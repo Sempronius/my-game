@@ -69,6 +69,28 @@
       bottom: 8px; right: 28px;
       font-size: 14px;
     }
+    /* Secret button */
+    #btn-secret {
+      position: fixed;
+      top: 8px;
+      left: 8px;
+      z-index: 20;
+      font-family: monospace;
+      font-weight: bold;
+      font-size: 10px;
+      padding: 4px 8px;
+      border: 1px solid rgba(255,100,100,0.4);
+      border-radius: 4px;
+      background: rgba(100,0,0,0.6);
+      color: #ffcccc;
+      -webkit-tap-highlight-color: transparent;
+      pointer-events: auto;
+    }
+    #btn-secret.active {
+      background: rgba(0,100,0,0.7);
+      border-color: rgba(100,255,100,0.4);
+      color: #66ff66;
+    }
     /* Landscape hint */
     #rotate-hint {
       position: fixed;
@@ -101,6 +123,7 @@
     <div>Rotate your device to landscape</div>
   </div>
   <canvas id="gameCanvas"></canvas>
+  <button id="btn-secret">DO NOT PRESS</button>
   <div id="touch-controls">
     <div id="btn-left" class="touch-btn">&larr;</div>
     <div id="btn-right" class="touch-btn">&rarr;</div>
@@ -171,6 +194,7 @@ const assets = {
   portal:      { img: new Image(), loaded: false },
   background2: { img: new Image(), loaded: false },
   boss:        { img: new Image(), loaded: false },
+  car:         { img: new Image(), loaded: false },
 };
 
 function loadImage(asset, src) {
@@ -208,6 +232,7 @@ async function loadAllAssets() {
     loadImage(assets.portal,      "portal.png"),
     loadImage(assets.background2, "background2.png"),
     loadImage(assets.boss,        "boss.png"),
+    loadImage(assets.car,         "car.png"),
   ]);
 
   loadLevel(0);
@@ -326,6 +351,7 @@ const player = {
     if (this.invincibleTimer > 0) this.invincibleTimer--;
     if (this.hpBarTimer > 0) this.hpBarTimer--;
 
+    const moving = keys["ArrowLeft"] || keys["ArrowRight"];
     if (keys["ArrowLeft"]) {
       this.velX = -MOVE_SPEED;
       this.facing = -1;
@@ -337,21 +363,46 @@ const player = {
       if (Math.abs(this.velX) < 0.5) this.velX = 0;
     }
 
+    // Engine rumble: start when moving in corvette mode, stop otherwise
+    if (corvetteMode && moving) {
+      startEngine();
+    } else {
+      stopEngine();
+    }
+
     if ((keys["ArrowUp"] || keys["Space"]) && this.onGround) {
       this.velY = JUMP_FORCE;
       this.onGround = false;
+      playSound(corvetteMode ? "car_jump" : "jump");
     }
 
     if (shootCooldown > 0) shootCooldown--;
     if ((keys["ShiftLeft"] || keys["ShiftRight"]) && shootCooldown === 0) {
-      projectiles.push({
-        x: this.x + this.width / 2 - PROJECTILE_SIZE / 2,
-        y: this.y + this.height / 2 - PROJECTILE_SIZE / 2,
-        velX: PROJECTILE_SPEED * this.facing,
-        facing: this.facing,
-        age: 0,
-        trail: [],
-      });
+      if (corvetteMode) {
+        for (const spread of [-1, 0, 1]) {
+          projectiles.push({
+            x: this.x + this.width / 2 - PROJECTILE_SIZE / 2,
+            y: this.y + this.height / 2 - PROJECTILE_SIZE / 2 + spread * 8,
+            velX: PROJECTILE_SPEED * this.facing,
+            facing: this.facing,
+            age: 0,
+            trail: [],
+            spread: spread,
+          });
+        }
+        playSound("shoot_triple");
+      } else {
+        projectiles.push({
+          x: this.x + this.width / 2 - PROJECTILE_SIZE / 2,
+          y: this.y + this.height / 2 - PROJECTILE_SIZE / 2,
+          velX: PROJECTILE_SPEED * this.facing,
+          facing: this.facing,
+          age: 0,
+          trail: [],
+          spread: 0,
+        });
+        playSound("shoot");
+      }
       shootCooldown = SHOOT_COOLDOWN;
     }
 
@@ -379,25 +430,89 @@ const player = {
       return;
     }
 
+    // ---- Corvette mode: draw car around player ----
+    if (corvetteMode) {
+      const carW = 100;
+      const carH = 36;
+      const carX = screenX + this.width / 2 - carW / 2;
+      const carY = screenY + this.height - carH - 2;
+
+      if (assets.car.loaded) {
+        ctx.save();
+        // car.png faces LEFT; flip when player faces right
+        if (this.facing === 1) {
+          ctx.translate(carX + carW, carY);
+          ctx.scale(-1, 1);
+          ctx.drawImage(assets.car.img, 0, 0, carW, carH);
+        } else {
+          ctx.drawImage(assets.car.img, carX, carY, carW, carH);
+        }
+        ctx.restore();
+      } else {
+        // Fallback: simple red rectangle car shape
+        ctx.save();
+        if (this.facing === -1) {
+          ctx.translate(screenX + this.width / 2, 0);
+          ctx.scale(-1, 1);
+          ctx.translate(-(screenX + this.width / 2), 0);
+        }
+        ctx.fillStyle = "rgba(0,0,0,0.3)";
+        ctx.fillRect(carX + 5, carY + carH - 2, carW - 10, 6);
+        ctx.fillStyle = "#cc0000";
+        ctx.fillRect(carX + 4, carY + 4, carW - 8, carH - 8);
+        ctx.fillStyle = "#222";
+        ctx.beginPath();
+        ctx.arc(carX + 18, carY + carH - 4, 8, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.arc(carX + carW - 18, carY + carH - 4, 8, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+      }
+    }
+
     if (assets.player.loaded) {
       ctx.save();
       if (this.facing === -1) {
         ctx.translate(screenX + this.width, screenY);
         ctx.scale(-1, 1);
-        ctx.drawImage(assets.player.img, 0, 0, this.width, this.height);
+        if (corvetteMode) {
+          ctx.drawImage(assets.player.img,
+            0, 0, assets.player.img.naturalWidth, assets.player.img.naturalHeight * 0.5,
+            0, 0, this.width, this.height * 0.5);
+        } else {
+          ctx.drawImage(assets.player.img, 0, 0, this.width, this.height);
+        }
       } else {
-        ctx.drawImage(assets.player.img, screenX, screenY, this.width, this.height);
+        if (corvetteMode) {
+          ctx.drawImage(assets.player.img,
+            0, 0, assets.player.img.naturalWidth, assets.player.img.naturalHeight * 0.5,
+            screenX, screenY, this.width, this.height * 0.5);
+        } else {
+          ctx.drawImage(assets.player.img, screenX, screenY, this.width, this.height);
+        }
       }
       ctx.restore();
     } else {
-      ctx.fillStyle = this.color;
-      ctx.fillRect(screenX, screenY, this.width, this.height);
-      ctx.fillStyle = "white";
-      const eyeOffsetX = this.facing === 1 ? 28 : 8;
-      ctx.fillRect(screenX + eyeOffsetX, screenY + 16, 12, 12);
-      ctx.fillStyle = "#1a1a2e";
-      const pupilOffsetX = this.facing === 1 ? 34 : 8;
-      ctx.fillRect(screenX + pupilOffsetX, screenY + 20, 6, 6);
+      if (corvetteMode) {
+        ctx.fillStyle = this.color;
+        ctx.fillRect(screenX, screenY, this.width, this.height * 0.5);
+        ctx.fillStyle = "white";
+        const eyeOffsetX = this.facing === 1 ? 28 : 8;
+        ctx.fillRect(screenX + eyeOffsetX, screenY + 8, 12, 12);
+        ctx.fillStyle = "#1a1a2e";
+        const pupilOffsetX = this.facing === 1 ? 34 : 8;
+        ctx.fillRect(screenX + pupilOffsetX, screenY + 12, 6, 6);
+      } else {
+        ctx.fillStyle = this.color;
+        ctx.fillRect(screenX, screenY, this.width, this.height);
+        ctx.fillStyle = "white";
+        const eyeOffsetX = this.facing === 1 ? 28 : 8;
+        ctx.fillRect(screenX + eyeOffsetX, screenY + 16, 12, 12);
+        ctx.fillStyle = "#1a1a2e";
+        const pupilOffsetX = this.facing === 1 ? 34 : 8;
+        ctx.fillRect(screenX + pupilOffsetX, screenY + 20, 6, 6);
+      }
     }
   }
 };
@@ -530,6 +645,549 @@ let transitionPhase = "";
 let nextLevelIndex = -1;
 
 let victoryScreen = false;
+
+// Secret corvette mode
+let corvetteMode = false;
+
+// =============================================================================
+// WEB AUDIO API — PROCEDURAL SOUND EFFECTS (zero file size)
+// =============================================================================
+
+const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+
+// iOS audio unlock — resume on first touch
+document.addEventListener("touchstart", function unlockAudio() {
+  if (audioCtx.state === "suspended") audioCtx.resume();
+  document.removeEventListener("touchstart", unlockAudio);
+}, { once: true });
+
+/** Helper: create white noise buffer of given duration */
+function createNoise(duration) {
+  const len = audioCtx.sampleRate * duration;
+  const buf = audioCtx.createBuffer(1, len, audioCtx.sampleRate);
+  const d = buf.getChannelData(0);
+  for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+  return buf;
+}
+
+// --- Persistent engine rumble for corvette mode ---
+let engineNodes = null;
+
+function startEngine() {
+  if (engineNodes) return;
+  if (audioCtx.state === "suspended") audioCtx.resume();
+
+  const osc1 = audioCtx.createOscillator();
+  const g1 = audioCtx.createGain();
+  const lp1 = audioCtx.createBiquadFilter();
+  osc1.type = "sawtooth"; osc1.frequency.value = 55;
+  lp1.type = "lowpass"; lp1.frequency.value = 200; lp1.Q.value = 3;
+  g1.gain.value = 0.12;
+  osc1.connect(lp1).connect(g1);
+
+  const osc2 = audioCtx.createOscillator();
+  const g2 = audioCtx.createGain();
+  const lp2 = audioCtx.createBiquadFilter();
+  osc2.type = "sawtooth"; osc2.frequency.value = 55.5;
+  lp2.type = "lowpass"; lp2.frequency.value = 180; lp2.Q.value = 2;
+  g2.gain.value = 0.08;
+  osc2.connect(lp2).connect(g2);
+
+  const lfo = audioCtx.createOscillator();
+  const lfoG = audioCtx.createGain();
+  lfo.type = "sine"; lfo.frequency.value = 6;
+  lfoG.gain.value = 4;
+  lfo.connect(lfoG);
+  lfoG.connect(osc1.frequency);
+  lfoG.connect(osc2.frequency);
+
+  const nBuf = createNoise(2);
+  const noise = audioCtx.createBufferSource();
+  noise.buffer = nBuf; noise.loop = true;
+  const nLp = audioCtx.createBiquadFilter();
+  nLp.type = "lowpass"; nLp.frequency.value = 150; nLp.Q.value = 1;
+  const nG = audioCtx.createGain();
+  nG.gain.value = 0.04;
+  noise.connect(nLp).connect(nG);
+
+  const ws = audioCtx.createWaveShaper();
+  const curve = new Float32Array(256);
+  for (let i = 0; i < 256; i++) { const x = (i / 128) - 1; curve[i] = Math.tanh(x * 2); }
+  ws.curve = curve;
+
+  const gainMaster = audioCtx.createGain();
+  gainMaster.gain.value = 0;
+  gainMaster.gain.linearRampToValueAtTime(1, audioCtx.currentTime + 0.15);
+
+  g1.connect(ws); g2.connect(ws);
+  nG.connect(gainMaster);
+  ws.connect(gainMaster);
+  gainMaster.connect(audioCtx.destination);
+
+  osc1.start(); osc2.start(); lfo.start(); noise.start();
+  engineNodes = { osc1, osc2, lfo, noise, gainMaster };
+}
+
+function stopEngine() {
+  if (!engineNodes) return;
+  const t = audioCtx.currentTime;
+  engineNodes.gainMaster.gain.setValueAtTime(engineNodes.gainMaster.gain.value, t);
+  engineNodes.gainMaster.gain.linearRampToValueAtTime(0, t + 0.2);
+  const nodes = engineNodes;
+  engineNodes = null;
+  setTimeout(() => {
+    try { nodes.osc1.stop(); } catch(e) {}
+    try { nodes.osc2.stop(); } catch(e) {}
+    try { nodes.lfo.stop(); } catch(e) {}
+    try { nodes.noise.stop(); } catch(e) {}
+    nodes.gainMaster.disconnect();
+  }, 250);
+}
+
+function playSound(type) {
+  if (audioCtx.state === "suspended") audioCtx.resume();
+  const t = audioCtx.currentTime;
+
+  if (type === "jump") {
+    // Layered jump: bright sine sweep + airy noise whoosh + sub-bass punch
+    const osc = audioCtx.createOscillator();
+    const oscGain = audioCtx.createGain();
+    const lfo = audioCtx.createOscillator();
+    const lfoGain = audioCtx.createGain();
+    osc.type = "sine";
+    osc.frequency.setValueAtTime(280, t);
+    osc.frequency.exponentialRampToValueAtTime(900, t + 0.12);
+    osc.frequency.exponentialRampToValueAtTime(700, t + 0.18);
+    lfo.type = "sine"; lfo.frequency.value = 30;
+    lfoGain.gain.value = 40;
+    lfo.connect(lfoGain).connect(osc.frequency);
+    oscGain.gain.setValueAtTime(0.13, t);
+    oscGain.gain.setValueAtTime(0.13, t + 0.06);
+    oscGain.gain.exponentialRampToValueAtTime(0.001, t + 0.2);
+    osc.connect(oscGain).connect(audioCtx.destination);
+    osc.start(t); osc.stop(t + 0.2);
+    lfo.start(t); lfo.stop(t + 0.2);
+
+    const noise = audioCtx.createBufferSource();
+    noise.buffer = createNoise(0.15);
+    const bp = audioCtx.createBiquadFilter();
+    bp.type = "bandpass";
+    bp.frequency.setValueAtTime(2000, t);
+    bp.frequency.exponentialRampToValueAtTime(5000, t + 0.1);
+    bp.Q.value = 2;
+    const nGain = audioCtx.createGain();
+    nGain.gain.setValueAtTime(0.04, t);
+    nGain.gain.exponentialRampToValueAtTime(0.001, t + 0.15);
+    noise.connect(bp).connect(nGain).connect(audioCtx.destination);
+    noise.start(t);
+
+    const sub = audioCtx.createOscillator();
+    const subGain = audioCtx.createGain();
+    sub.type = "sine";
+    sub.frequency.setValueAtTime(120, t);
+    sub.frequency.exponentialRampToValueAtTime(60, t + 0.08);
+    subGain.gain.setValueAtTime(0.12, t);
+    subGain.gain.exponentialRampToValueAtTime(0.001, t + 0.1);
+    sub.connect(subGain).connect(audioCtx.destination);
+    sub.start(t); sub.stop(t + 0.1);
+  }
+
+  else if (type === "car_jump") {
+    // Engine rev + tire screech
+    const rev = audioCtx.createOscillator();
+    const revLp = audioCtx.createBiquadFilter();
+    const revG = audioCtx.createGain();
+    const revWs = audioCtx.createWaveShaper();
+    const revCurve = new Float32Array(256);
+    for (let i = 0; i < 256; i++) { const x = (i / 128) - 1; revCurve[i] = Math.tanh(x * 3); }
+    revWs.curve = revCurve;
+    rev.type = "sawtooth";
+    rev.frequency.setValueAtTime(60, t);
+    rev.frequency.exponentialRampToValueAtTime(180, t + 0.15);
+    rev.frequency.exponentialRampToValueAtTime(120, t + 0.35);
+    revLp.type = "lowpass";
+    revLp.frequency.setValueAtTime(300, t);
+    revLp.frequency.exponentialRampToValueAtTime(800, t + 0.12);
+    revLp.frequency.exponentialRampToValueAtTime(400, t + 0.35);
+    revLp.Q.value = 4;
+    revG.gain.setValueAtTime(0.14, t);
+    revG.gain.setValueAtTime(0.14, t + 0.12);
+    revG.gain.exponentialRampToValueAtTime(0.001, t + 0.35);
+    rev.connect(revWs).connect(revLp).connect(revG).connect(audioCtx.destination);
+    rev.start(t); rev.stop(t + 0.35);
+
+    const rev2 = audioCtx.createOscillator();
+    const rev2G = audioCtx.createGain();
+    rev2.type = "sawtooth";
+    rev2.frequency.setValueAtTime(61, t);
+    rev2.frequency.exponentialRampToValueAtTime(182, t + 0.15);
+    rev2.frequency.exponentialRampToValueAtTime(121, t + 0.35);
+    rev2G.gain.setValueAtTime(0.06, t);
+    rev2G.gain.exponentialRampToValueAtTime(0.001, t + 0.35);
+    rev2.connect(revWs).connect(rev2G).connect(audioCtx.destination);
+    rev2.start(t); rev2.stop(t + 0.35);
+
+    const screech = audioCtx.createBufferSource();
+    screech.buffer = createNoise(0.25);
+    const sBp = audioCtx.createBiquadFilter();
+    sBp.type = "bandpass";
+    sBp.frequency.setValueAtTime(2000, t);
+    sBp.frequency.exponentialRampToValueAtTime(5000, t + 0.08);
+    sBp.frequency.exponentialRampToValueAtTime(3000, t + 0.2);
+    sBp.Q.value = 8;
+    const sG = audioCtx.createGain();
+    sG.gain.setValueAtTime(0.06, t);
+    sG.gain.setValueAtTime(0.06, t + 0.05);
+    sG.gain.exponentialRampToValueAtTime(0.001, t + 0.22);
+    screech.connect(sBp).connect(sG).connect(audioCtx.destination);
+    screech.start(t);
+
+    const sub2 = audioCtx.createOscillator();
+    const sub2G = audioCtx.createGain();
+    sub2.type = "sine";
+    sub2.frequency.setValueAtTime(80, t);
+    sub2.frequency.exponentialRampToValueAtTime(35, t + 0.12);
+    sub2G.gain.setValueAtTime(0.16, t);
+    sub2G.gain.exponentialRampToValueAtTime(0.001, t + 0.15);
+    sub2.connect(sub2G).connect(audioCtx.destination);
+    sub2.start(t); sub2.stop(t + 0.15);
+  }
+
+  else if (type === "shoot") {
+    // Punchy laser: resonant square sweep + bright saw + click transient
+    const osc1 = audioCtx.createOscillator();
+    const filt = audioCtx.createBiquadFilter();
+    const g1 = audioCtx.createGain();
+    osc1.type = "square";
+    osc1.frequency.setValueAtTime(1200, t);
+    osc1.frequency.exponentialRampToValueAtTime(180, t + 0.1);
+    filt.type = "lowpass";
+    filt.frequency.setValueAtTime(4000, t);
+    filt.frequency.exponentialRampToValueAtTime(400, t + 0.1);
+    filt.Q.value = 8;
+    g1.gain.setValueAtTime(0.07, t);
+    g1.gain.exponentialRampToValueAtTime(0.001, t + 0.12);
+    osc1.connect(filt).connect(g1).connect(audioCtx.destination);
+    osc1.start(t); osc1.stop(t + 0.12);
+
+    const osc2 = audioCtx.createOscillator();
+    const g2 = audioCtx.createGain();
+    osc2.type = "sawtooth";
+    osc2.frequency.setValueAtTime(900, t);
+    osc2.frequency.exponentialRampToValueAtTime(300, t + 0.06);
+    g2.gain.setValueAtTime(0.04, t);
+    g2.gain.exponentialRampToValueAtTime(0.001, t + 0.08);
+    osc2.connect(g2).connect(audioCtx.destination);
+    osc2.start(t); osc2.stop(t + 0.08);
+
+    const click = audioCtx.createOscillator();
+    const cg = audioCtx.createGain();
+    click.type = "square"; click.frequency.value = 3000;
+    cg.gain.setValueAtTime(0.08, t);
+    cg.gain.exponentialRampToValueAtTime(0.001, t + 0.01);
+    click.connect(cg).connect(audioCtx.destination);
+    click.start(t); click.stop(t + 0.015);
+  }
+
+  else if (type === "shoot_triple") {
+    // Beefier triple-shot: detuned dual-saw + filtered noise + sub punch
+    for (const detune of [-15, 15]) {
+      const osc = audioCtx.createOscillator();
+      const g = audioCtx.createGain();
+      const f = audioCtx.createBiquadFilter();
+      osc.type = "sawtooth";
+      osc.frequency.setValueAtTime(800, t);
+      osc.frequency.exponentialRampToValueAtTime(120, t + 0.14);
+      osc.detune.value = detune;
+      f.type = "lowpass";
+      f.frequency.setValueAtTime(5000, t);
+      f.frequency.exponentialRampToValueAtTime(300, t + 0.14);
+      f.Q.value = 5;
+      g.gain.setValueAtTime(0.06, t);
+      g.gain.exponentialRampToValueAtTime(0.001, t + 0.15);
+      osc.connect(f).connect(g).connect(audioCtx.destination);
+      osc.start(t); osc.stop(t + 0.15);
+    }
+
+    const ns = audioCtx.createBufferSource();
+    ns.buffer = createNoise(0.06);
+    const bp2 = audioCtx.createBiquadFilter();
+    bp2.type = "bandpass"; bp2.frequency.value = 3000; bp2.Q.value = 1;
+    const ng = audioCtx.createGain();
+    ng.gain.setValueAtTime(0.06, t);
+    ng.gain.exponentialRampToValueAtTime(0.001, t + 0.05);
+    ns.connect(bp2).connect(ng).connect(audioCtx.destination);
+    ns.start(t);
+
+    const sub = audioCtx.createOscillator();
+    const sg = audioCtx.createGain();
+    sub.type = "sine";
+    sub.frequency.setValueAtTime(100, t);
+    sub.frequency.exponentialRampToValueAtTime(40, t + 0.1);
+    sg.gain.setValueAtTime(0.1, t);
+    sg.gain.exponentialRampToValueAtTime(0.001, t + 0.1);
+    sub.connect(sg).connect(audioCtx.destination);
+    sub.start(t); sub.stop(t + 0.1);
+  }
+
+  else if (type === "enemy_death") {
+    const pitch = 0.9 + Math.random() * 0.3;
+    const variant = Math.floor(Math.random() * 3);
+
+    if (variant === 0) {
+      // "Splat-pop": FM descent + noise crackle
+      const mod = audioCtx.createOscillator();
+      const modG = audioCtx.createGain();
+      const osc = audioCtx.createOscillator();
+      const g = audioCtx.createGain();
+      mod.type = "square";
+      mod.frequency.setValueAtTime(200 * pitch, t);
+      mod.frequency.exponentialRampToValueAtTime(30, t + 0.25);
+      modG.gain.setValueAtTime(300, t);
+      modG.gain.linearRampToValueAtTime(50, t + 0.25);
+      mod.connect(modG).connect(osc.frequency);
+      osc.type = "sine";
+      osc.frequency.setValueAtTime(500 * pitch, t);
+      osc.frequency.exponentialRampToValueAtTime(60, t + 0.3);
+      g.gain.setValueAtTime(0.15, t);
+      g.gain.setValueAtTime(0.12, t + 0.05);
+      g.gain.exponentialRampToValueAtTime(0.001, t + 0.3);
+      osc.connect(g).connect(audioCtx.destination);
+      osc.start(t); osc.stop(t + 0.3);
+      mod.start(t); mod.stop(t + 0.3);
+      const ns = audioCtx.createBufferSource();
+      ns.buffer = createNoise(0.12);
+      const hp = audioCtx.createBiquadFilter();
+      hp.type = "highpass"; hp.frequency.value = 4000;
+      const ng2 = audioCtx.createGain();
+      ng2.gain.setValueAtTime(0.06, t);
+      ng2.gain.exponentialRampToValueAtTime(0.001, t + 0.12);
+      ns.connect(hp).connect(ng2).connect(audioCtx.destination);
+      ns.start(t);
+    } else if (variant === 1) {
+      // "Bip-bwoop": two-tone with filter sweep
+      const o1 = audioCtx.createOscillator();
+      const f1 = audioCtx.createBiquadFilter();
+      const g1 = audioCtx.createGain();
+      o1.type = "square";
+      o1.frequency.setValueAtTime(700 * pitch, t);
+      o1.frequency.exponentialRampToValueAtTime(350 * pitch, t + 0.06);
+      f1.type = "lowpass"; f1.frequency.value = 3000; f1.Q.value = 4;
+      g1.gain.setValueAtTime(0.1, t);
+      g1.gain.exponentialRampToValueAtTime(0.001, t + 0.07);
+      o1.connect(f1).connect(g1).connect(audioCtx.destination);
+      o1.start(t); o1.stop(t + 0.07);
+      const mod = audioCtx.createOscillator();
+      const modG = audioCtx.createGain();
+      const o2 = audioCtx.createOscillator();
+      const g2 = audioCtx.createGain();
+      mod.type = "sine"; mod.frequency.value = 12;
+      modG.gain.value = 80;
+      mod.connect(modG).connect(o2.frequency);
+      o2.type = "sine";
+      o2.frequency.setValueAtTime(480 * pitch, t + 0.09);
+      o2.frequency.exponentialRampToValueAtTime(55, t + 0.38);
+      g2.gain.setValueAtTime(0.001, t);
+      g2.gain.setValueAtTime(0.14, t + 0.09);
+      g2.gain.exponentialRampToValueAtTime(0.001, t + 0.38);
+      o2.connect(g2).connect(audioCtx.destination);
+      o2.start(t + 0.09); o2.stop(t + 0.38);
+      mod.start(t + 0.09); mod.stop(t + 0.38);
+    } else {
+      // "Crunch-thud": filtered noise into distorted sub drop
+      const ns = audioCtx.createBufferSource();
+      ns.buffer = createNoise(0.2);
+      const bp3 = audioCtx.createBiquadFilter();
+      bp3.type = "bandpass";
+      bp3.frequency.setValueAtTime(5000, t);
+      bp3.frequency.exponentialRampToValueAtTime(500, t + 0.15);
+      bp3.Q.value = 3;
+      const ng3 = audioCtx.createGain();
+      ng3.gain.setValueAtTime(0.12, t);
+      ng3.gain.exponentialRampToValueAtTime(0.001, t + 0.18);
+      ns.connect(bp3).connect(ng3).connect(audioCtx.destination);
+      ns.start(t);
+      const osc = audioCtx.createOscillator();
+      const ws = audioCtx.createWaveShaper();
+      const curve = new Float32Array(256);
+      for (let i = 0; i < 256; i++) { const x = (i / 128) - 1; curve[i] = Math.tanh(x * 3); }
+      ws.curve = curve;
+      const g = audioCtx.createGain();
+      osc.type = "sine";
+      osc.frequency.setValueAtTime(110 * pitch, t + 0.06);
+      osc.frequency.exponentialRampToValueAtTime(35, t + 0.35);
+      g.gain.setValueAtTime(0.001, t);
+      g.gain.setValueAtTime(0.18, t + 0.06);
+      g.gain.exponentialRampToValueAtTime(0.001, t + 0.35);
+      osc.connect(ws).connect(g).connect(audioCtx.destination);
+      osc.start(t + 0.06); osc.stop(t + 0.35);
+    }
+  }
+
+  else if (type === "boss_death") {
+    // Epic 4-layer: rising alarm → siren → filtered explosion → sub rumble
+    for (const det of [-10, 10]) {
+      const osc = audioCtx.createOscillator();
+      const f = audioCtx.createBiquadFilter();
+      const g = audioCtx.createGain();
+      osc.type = "sawtooth";
+      osc.frequency.setValueAtTime(80, t);
+      osc.frequency.exponentialRampToValueAtTime(1200, t + 0.6);
+      osc.detune.value = det;
+      f.type = "lowpass";
+      f.frequency.setValueAtTime(300, t);
+      f.frequency.exponentialRampToValueAtTime(6000, t + 0.5);
+      f.Q.value = 6;
+      g.gain.setValueAtTime(0.1, t);
+      g.gain.linearRampToValueAtTime(0.18, t + 0.45);
+      g.gain.exponentialRampToValueAtTime(0.001, t + 0.6);
+      osc.connect(f).connect(g).connect(audioCtx.destination);
+      osc.start(t); osc.stop(t + 0.6);
+    }
+
+    const siren = audioCtx.createOscillator();
+    const sLfo = audioCtx.createOscillator();
+    const sLfoG = audioCtx.createGain();
+    const sg2 = audioCtx.createGain();
+    siren.type = "square";
+    siren.frequency.setValueAtTime(600, t + 0.4);
+    siren.frequency.linearRampToValueAtTime(1500, t + 0.55);
+    siren.frequency.linearRampToValueAtTime(400, t + 0.7);
+    sLfo.type = "sine"; sLfo.frequency.value = 20;
+    sLfoG.gain.value = 100;
+    sLfo.connect(sLfoG).connect(siren.frequency);
+    sg2.gain.setValueAtTime(0.001, t);
+    sg2.gain.setValueAtTime(0.08, t + 0.4);
+    sg2.gain.exponentialRampToValueAtTime(0.001, t + 0.7);
+    siren.connect(sg2).connect(audioCtx.destination);
+    siren.start(t + 0.4); siren.stop(t + 0.7);
+    sLfo.start(t + 0.4); sLfo.stop(t + 0.7);
+
+    const ns = audioCtx.createBufferSource();
+    ns.buffer = createNoise(1.2);
+    const lp = audioCtx.createBiquadFilter();
+    lp.type = "lowpass";
+    lp.frequency.setValueAtTime(10000, t + 0.55);
+    lp.frequency.exponentialRampToValueAtTime(200, t + 1.6);
+    lp.Q.value = 1;
+    const ws = audioCtx.createWaveShaper();
+    const curve = new Float32Array(256);
+    for (let i = 0; i < 256; i++) { const x = (i / 128) - 1; curve[i] = Math.tanh(x * 2.5); }
+    ws.curve = curve;
+    const ng4 = audioCtx.createGain();
+    ng4.gain.setValueAtTime(0.001, t);
+    ng4.gain.setValueAtTime(0.22, t + 0.55);
+    ng4.gain.setValueAtTime(0.18, t + 0.8);
+    ng4.gain.exponentialRampToValueAtTime(0.001, t + 1.7);
+    ns.connect(ws).connect(lp).connect(ng4).connect(audioCtx.destination);
+    ns.start(t + 0.5);
+
+    const sub = audioCtx.createOscillator();
+    const subLfo = audioCtx.createOscillator();
+    const subLfoG = audioCtx.createGain();
+    const subG = audioCtx.createGain();
+    sub.type = "sine";
+    sub.frequency.setValueAtTime(55, t + 0.8);
+    sub.frequency.exponentialRampToValueAtTime(25, t + 2.0);
+    subLfo.type = "sine"; subLfo.frequency.value = 4;
+    subLfoG.gain.value = 10;
+    subLfo.connect(subLfoG).connect(sub.frequency);
+    subG.gain.setValueAtTime(0.001, t);
+    subG.gain.setValueAtTime(0.2, t + 0.8);
+    subG.gain.exponentialRampToValueAtTime(0.001, t + 2.0);
+    sub.connect(subG).connect(audioCtx.destination);
+    sub.start(t + 0.8); sub.stop(t + 2.0);
+    subLfo.start(t + 0.8); subLfo.stop(t + 2.0);
+  }
+
+  else if (type === "player_hit") {
+    // Crunchy impact: distorted thud + noise crunch + high ring
+    const osc = audioCtx.createOscillator();
+    const ws = audioCtx.createWaveShaper();
+    const curve = new Float32Array(256);
+    for (let i = 0; i < 256; i++) { const x = (i / 128) - 1; curve[i] = Math.tanh(x * 4); }
+    ws.curve = curve;
+    const g = audioCtx.createGain();
+    osc.type = "sine";
+    osc.frequency.setValueAtTime(150, t);
+    osc.frequency.exponentialRampToValueAtTime(40, t + 0.15);
+    g.gain.setValueAtTime(0.18, t);
+    g.gain.exponentialRampToValueAtTime(0.001, t + 0.18);
+    osc.connect(ws).connect(g).connect(audioCtx.destination);
+    osc.start(t); osc.stop(t + 0.18);
+
+    const ns = audioCtx.createBufferSource();
+    ns.buffer = createNoise(0.08);
+    const lp = audioCtx.createBiquadFilter();
+    lp.type = "lowpass"; lp.frequency.value = 2000; lp.Q.value = 2;
+    const ng5 = audioCtx.createGain();
+    ng5.gain.setValueAtTime(0.08, t);
+    ng5.gain.exponentialRampToValueAtTime(0.001, t + 0.08);
+    ns.connect(lp).connect(ng5).connect(audioCtx.destination);
+    ns.start(t);
+
+    const ring = audioCtx.createOscillator();
+    const rg = audioCtx.createGain();
+    ring.type = "sine"; ring.frequency.value = 2200;
+    rg.gain.setValueAtTime(0.04, t);
+    rg.gain.exponentialRampToValueAtTime(0.001, t + 0.06);
+    ring.connect(rg).connect(audioCtx.destination);
+    ring.start(t); ring.stop(t + 0.06);
+  }
+
+  else if (type === "boss_hit") {
+    // Heavy metallic clang: FM bell + resonant ping + impact noise
+    const mod = audioCtx.createOscillator();
+    const modG = audioCtx.createGain();
+    const car = audioCtx.createOscillator();
+    const cg = audioCtx.createGain();
+    mod.type = "sine"; mod.frequency.value = 1870;
+    modG.gain.setValueAtTime(600, t);
+    modG.gain.exponentialRampToValueAtTime(50, t + 0.25);
+    mod.connect(modG).connect(car.frequency);
+    car.type = "sine"; car.frequency.value = 950;
+    cg.gain.setValueAtTime(0.12, t);
+    cg.gain.exponentialRampToValueAtTime(0.001, t + 0.3);
+    car.connect(cg).connect(audioCtx.destination);
+    car.start(t); car.stop(t + 0.3);
+    mod.start(t); mod.stop(t + 0.3);
+
+    const ping = audioCtx.createOscillator();
+    const bp4 = audioCtx.createBiquadFilter();
+    const pg = audioCtx.createGain();
+    ping.type = "triangle";
+    ping.frequency.setValueAtTime(3200, t);
+    ping.frequency.exponentialRampToValueAtTime(1800, t + 0.12);
+    bp4.type = "bandpass"; bp4.frequency.value = 2500; bp4.Q.value = 10;
+    pg.gain.setValueAtTime(0.06, t);
+    pg.gain.exponentialRampToValueAtTime(0.001, t + 0.15);
+    ping.connect(bp4).connect(pg).connect(audioCtx.destination);
+    ping.start(t); ping.stop(t + 0.15);
+
+    const ns = audioCtx.createBufferSource();
+    ns.buffer = createNoise(0.04);
+    const ng6 = audioCtx.createGain();
+    ng6.gain.setValueAtTime(0.07, t);
+    ng6.gain.exponentialRampToValueAtTime(0.001, t + 0.04);
+    ns.connect(ng6).connect(audioCtx.destination);
+    ns.start(t);
+  }
+}
+
+// Secret button handler
+const secretBtn = document.getElementById("btn-secret");
+secretBtn.addEventListener("touchstart", (e) => {
+  e.preventDefault();
+  corvetteMode = !corvetteMode;
+  secretBtn.textContent = corvetteMode ? "ACTIVATED" : "DO NOT PRESS";
+  secretBtn.classList.toggle("active", corvetteMode);
+}, { passive: false });
+secretBtn.addEventListener("click", (e) => {
+  // Fallback for non-touch
+  corvetteMode = !corvetteMode;
+  secretBtn.textContent = corvetteMode ? "ACTIVATED" : "DO NOT PRESS";
+  secretBtn.classList.toggle("active", corvetteMode);
+});
 
 function deepCopy(obj) {
   return JSON.parse(JSON.stringify(obj));
@@ -748,6 +1406,9 @@ function updateBoss() {
       if (activeBoss.hp <= 0) {
         activeBoss.alive = false;
         victoryScreen = true;
+        playSound("boss_death");
+      } else {
+        playSound("boss_hit");
       }
     } else if (player.invincibleTimer === 0) {
       damagePlayer(1);
@@ -957,7 +1618,7 @@ function updateProjectiles() {
     if (p.trail.length > 3) p.trail.shift();
 
     p.x += p.velX;
-    p.y += Math.sin(p.age * 0.3) * 2;
+    p.y += Math.sin(p.age * 0.3) * 2 + (p.spread || 0) * 0.8;
 
     if (Math.abs(p.x - player.x) > 600) {
       projectiles.splice(i, 1);
@@ -974,6 +1635,7 @@ function updateProjectiles() {
         spawnDeathEffect(enemy);
         activeEnemies.splice(e, 1);
         projectiles.splice(i, 1);
+        playSound("enemy_death");
         hit = true;
         break;
       }
@@ -992,6 +1654,9 @@ function updateProjectiles() {
         if (activeBoss.hp <= 0) {
           activeBoss.alive = false;
           victoryScreen = true;
+          playSound("boss_death");
+        } else {
+          playSound("boss_hit");
         }
       }
     }
@@ -1211,6 +1876,7 @@ function damagePlayer(amount) {
   player.hp -= amount;
   player.invincibleTimer = PLAYER_INVINCIBLE_TIME;
   player.hpBarTimer = PLAYER_HP_BAR_DURATION;
+  playSound("player_hit");
 
   if (player.hp <= 0) {
     player.hp = 0;
