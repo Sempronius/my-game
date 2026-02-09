@@ -69,6 +69,16 @@
       bottom: 8px; right: 28px;
       font-size: 14px;
     }
+    #btn-aim-up {
+      width: 52px; height: 52px;
+      bottom: 80px; right: 100px;
+      font-size: 20px;
+    }
+    #btn-aim-down {
+      width: 52px; height: 52px;
+      bottom: 16px; right: 100px;
+      font-size: 20px;
+    }
     /* Secret button */
     #btn-secret {
       position: fixed;
@@ -129,6 +139,8 @@
     <div id="btn-right" class="touch-btn">&rarr;</div>
     <div id="btn-jump" class="touch-btn">JUMP</div>
     <div id="btn-shoot" class="touch-btn">FIRE</div>
+    <div id="btn-aim-up" class="touch-btn">&lt;</div>
+    <div id="btn-aim-down" class="touch-btn">&gt;</div>
   </div>
 
   <script>
@@ -162,7 +174,7 @@ resizeCanvas();
 // =============================================================================
 
 const GRAVITY = 0.6;
-const JUMP_FORCE = -13;
+const JUMP_FORCE = -15;
 const MOVE_SPEED = 5;
 const FRICTION = 0.8;
 const MAX_FALL_SPEED = 15;
@@ -221,12 +233,13 @@ async function loadAnimFrames(asset, baseSrc) {
   asset.frames = asset.loaded ? [asset.img] : [];
   if (!asset.loaded) return;
   const prefix = baseSrc.replace(".png", "");
+  const bust = "?t=" + Date.now();
   for (let n = 1; n <= 20; n++) {
     const img = new Image();
     const ok = await new Promise((resolve) => {
       img.onload = () => resolve(true);
       img.onerror = () => resolve(false);
-      img.src = prefix + n + ".png";
+      img.src = prefix + n + ".png" + bust;
     });
     if (!ok) break;
     asset.frames.push(img);
@@ -272,7 +285,10 @@ const keys = {};
 // Keyboard (still works if connected)
 window.addEventListener("keydown", (e) => {
   keys[e.code] = true;
-  if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Space", "ShiftLeft", "ShiftRight"].includes(e.code)) {
+  // Discrete aim rotation: each press steps the angle by 15°
+  if (e.code === "Comma")  player.aimAngle -= Math.PI / 12;
+  if (e.code === "Period") player.aimAngle += Math.PI / 12;
+  if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Space", "ShiftLeft", "ShiftRight", "Comma", "Period"].includes(e.code)) {
     e.preventDefault();
   }
 });
@@ -288,6 +304,9 @@ function setupTouchButton(id, keyCode) {
     e.preventDefault();
     keys[keyCode] = true;
     btn.classList.add("active");
+    // Discrete aim step for touch buttons
+    if (keyCode === "Comma")  player.aimAngle -= Math.PI / 12;
+    if (keyCode === "Period") player.aimAngle += Math.PI / 12;
   }, { passive: false });
 
   btn.addEventListener("touchend", (e) => {
@@ -306,6 +325,8 @@ setupTouchButton("btn-left", "ArrowLeft");
 setupTouchButton("btn-right", "ArrowRight");
 setupTouchButton("btn-jump", "Space");
 setupTouchButton("btn-shoot", "ShiftLeft");
+setupTouchButton("btn-aim-up", "Comma");
+setupTouchButton("btn-aim-down", "Period");
 
 // Prevent default touch on canvas (no scrolling/zooming)
 canvas.addEventListener("touchstart", (e) => e.preventDefault(), { passive: false });
@@ -346,8 +367,8 @@ const camera = {
 const player = {
   x: 100,
   y: 300,
-  width: 48,
-  height: 64,
+  width: 60,
+  height: 80,
   velX: 0,
   velY: 0,
   onGround: false,
@@ -359,6 +380,7 @@ const player = {
   hpBarTimer: 0,
   animFrame: 0,
   animTimer: 0,
+  aimAngle: 0,
 
   reset() {
     this.x = 100;
@@ -371,6 +393,7 @@ const player = {
     this.hpBarTimer = 0;
     this.animFrame = 0;
     this.animTimer = 0;
+    this.aimAngle = 0;
   },
 
   update() {
@@ -414,14 +437,21 @@ const player = {
       playSound(corvetteMode ? "car_jump" : "jump");
     }
 
+    // ---- Aiming (angle set by keydown handler, persists between presses) ----
+    const fireAngle = this.facing === 1 ? this.aimAngle : Math.PI - this.aimAngle;
+
+    // ---- Shooting: Shift fires in aimed direction ----
     if (shootCooldown > 0) shootCooldown--;
     if ((keys["ShiftLeft"] || keys["ShiftRight"]) && shootCooldown === 0) {
       if (corvetteMode) {
         for (const spread of [-1, 0, 1]) {
+          const sa = fireAngle + spread * 0.15;
           projectiles.push({
             x: this.x + this.width / 2 - PROJECTILE_SIZE / 2,
-            y: this.y + this.height / 2 - PROJECTILE_SIZE / 2 + spread * 8,
-            velX: PROJECTILE_SPEED * this.facing,
+            y: this.y + this.height / 2 - PROJECTILE_SIZE / 2,
+            velX: Math.cos(sa) * PROJECTILE_SPEED,
+            velY: Math.sin(sa) * PROJECTILE_SPEED,
+            angle: sa,
             facing: this.facing,
             age: 0,
             trail: [],
@@ -433,7 +463,9 @@ const player = {
         projectiles.push({
           x: this.x + this.width / 2 - PROJECTILE_SIZE / 2,
           y: this.y + this.height / 2 - PROJECTILE_SIZE / 2,
-          velX: PROJECTILE_SPEED * this.facing,
+          velX: Math.cos(fireAngle) * PROJECTILE_SPEED,
+          velY: Math.sin(fireAngle) * PROJECTILE_SPEED,
+          angle: fireAngle,
           facing: this.facing,
           age: 0,
           trail: [],
@@ -553,6 +585,7 @@ const player = {
         ctx.fillRect(screenX + pupilOffsetX, screenY + 20, 6, 6);
       }
     }
+
   }
 };
 
@@ -566,14 +599,14 @@ const levels = [
     backgroundKey: "background",
     platforms: [
       { x: 0,    y: 450, width: 3200, height: 50, color: "#4a1a1a" },
-      { x: 250,  y: 350, width: 150,  height: 20, color: "#6b2d2d" },
+      { x: 250,  y: 330, width: 150,  height: 20, color: "#6b2d2d" },
       { x: 500,  y: 280, width: 180,  height: 20, color: "#723333" },
       { x: 780,  y: 340, width: 140,  height: 20, color: "#6b2d2d" },
       { x: 1000, y: 260, width: 200,  height: 20, color: "#7a3838" },
       { x: 1350, y: 450, width: 800,  height: 50, color: "#4a1a1a" },
-      { x: 1200, y: 350, width: 120,  height: 20, color: "#723333" },
+      { x: 1200, y: 330, width: 120,  height: 20, color: "#723333" },
       { x: 1500, y: 300, width: 160,  height: 20, color: "#6b2d2d" },
-      { x: 1750, y: 370, width: 140,  height: 20, color: "#7a3838" },
+      { x: 1750, y: 330, width: 140,  height: 20, color: "#7a3838" },
       { x: 2000, y: 280, width: 180,  height: 20, color: "#6b2d2d" },
       { x: 2300, y: 450, width: 1000, height: 50, color: "#4a1a1a" },
       { x: 2400, y: 340, width: 150,  height: 20, color: "#723333" },
@@ -614,7 +647,7 @@ const levels = [
     backgroundKey: "background2",
     platforms: [
       { x: 0,   y: 450, width: 700,  height: 50, color: "#5c4033" },
-      { x: 250, y: 350, width: 120, height: 20, color: "#6b4f3a" },
+      { x: 250, y: 330, width: 120, height: 20, color: "#6b4f3a" },
       { x: 500, y: 300, width: 140, height: 20, color: "#6b4f3a" },
       { x: 850,  y: 450, width: 650,  height: 50, color: "#5c4033" },
       { x: 950,  y: 340, width: 120, height: 20, color: "#6b4f3a" },
@@ -1384,6 +1417,19 @@ function drawEnemies() {
     const chunkW = enemy.width / cols;
     const chunkH = enemy.height / rows;
 
+    // Count fully-destroyed bottom rows so remaining chunks settle downward
+    let dropRows = 0;
+    if (enemy.destroyedChunks && enemy.destroyedChunks.length > 0) {
+      for (let r = rows - 1; r >= 0; r--) {
+        let rowGone = true;
+        for (let c = 0; c < cols; c++) {
+          if (!enemy.destroyedChunks.includes(r * cols + c)) { rowGone = false; break; }
+        }
+        if (rowGone) dropRows++; else break;
+      }
+    }
+    const dropY = dropRows * chunkH;
+
     if (assets.enemy.loaded) {
       const img = assets.enemy.img;
       const srcChunkW = img.naturalWidth / cols;
@@ -1391,7 +1437,7 @@ function drawEnemies() {
 
       ctx.save();
       if (enemy.direction === -1) {
-        ctx.translate(screenX + enemy.width, screenY);
+        ctx.translate(screenX + enemy.width, screenY + dropY);
         ctx.scale(-1, 1);
       }
 
@@ -1400,7 +1446,7 @@ function drawEnemies() {
         const col = idx % cols;
         const row = Math.floor(idx / cols);
         const dx = enemy.direction === -1 ? col * chunkW : screenX + col * chunkW;
-        const dy = enemy.direction === -1 ? row * chunkH : screenY + row * chunkH;
+        const dy = enemy.direction === -1 ? row * chunkH : screenY + row * chunkH + dropY;
 
         ctx.drawImage(img,
           col * srcChunkW, row * srcChunkH, srcChunkW, srcChunkH,
@@ -1414,7 +1460,7 @@ function drawEnemies() {
         const col = idx % cols;
         const row = Math.floor(idx / cols);
         ctx.fillStyle = enemy.color;
-        ctx.fillRect(screenX + col * chunkW, screenY + row * chunkH, chunkW, chunkH);
+        ctx.fillRect(screenX + col * chunkW, screenY + row * chunkH + dropY, chunkW, chunkH);
       }
     }
   }
@@ -1429,6 +1475,17 @@ function updateBoss() {
 
   if (activeBoss.invincibleTimer > 0) {
     activeBoss.invincibleTimer--;
+  }
+
+  // Boss walk animation
+  if (assets.boss.frames.length > 1) {
+    if (!activeBoss.animFrame) activeBoss.animFrame = 0;
+    if (!activeBoss.animTimer) activeBoss.animTimer = 0;
+    activeBoss.animTimer++;
+    if (activeBoss.animTimer >= 16) {
+      activeBoss.animTimer = 0;
+      activeBoss.animFrame = (activeBoss.animFrame + 1) % assets.boss.frames.length;
+    }
   }
 
   const hpRatio = activeBoss.hp / activeBoss.maxHp;
@@ -1581,14 +1638,29 @@ function drawBoss() {
   const bChunkW = activeBoss.width / bCols;
   const bChunkH = activeBoss.height / bRows;
 
-  if (assets.boss.loaded) {
-    const img = assets.boss.img;
-    const srcChunkW = img.naturalWidth / bCols;
-    const srcChunkH = img.naturalHeight / bRows;
+  // Count fully-destroyed bottom rows so remaining chunks settle downward
+  let dropRows = 0;
+  if (activeBoss.destroyedChunks && activeBoss.destroyedChunks.length > 0) {
+    for (let r = bRows - 1; r >= 0; r--) {
+      let rowGone = true;
+      for (let c = 0; c < bCols; c++) {
+        if (!activeBoss.destroyedChunks.includes(r * bCols + c)) { rowGone = false; break; }
+      }
+      if (rowGone) dropRows++; else break;
+    }
+  }
+  const dropY = dropRows * bChunkH;
+
+  // Pick current animation frame for boss
+  const bImg = assets.boss.frames.length > 1 ? assets.boss.frames[activeBoss.animFrame || 0] : (assets.boss.loaded ? assets.boss.img : null);
+
+  if (bImg) {
+    const srcChunkW = bImg.naturalWidth / bCols;
+    const srcChunkH = bImg.naturalHeight / bRows;
 
     ctx.save();
     if (activeBoss.direction === -1) {
-      ctx.translate(screenX + activeBoss.width, screenY);
+      ctx.translate(screenX + activeBoss.width, screenY + dropY);
       ctx.scale(-1, 1);
     }
 
@@ -1597,9 +1669,9 @@ function drawBoss() {
       const col = idx % bCols;
       const row = Math.floor(idx / bCols);
       const dx = activeBoss.direction === -1 ? col * bChunkW : screenX + col * bChunkW;
-      const dy = activeBoss.direction === -1 ? row * bChunkH : screenY + row * bChunkH;
+      const dy = activeBoss.direction === -1 ? row * bChunkH : screenY + row * bChunkH + dropY;
 
-      ctx.drawImage(img,
+      ctx.drawImage(bImg,
         col * srcChunkW, row * srcChunkH, srcChunkW, srcChunkH,
         dx, dy, bChunkW, bChunkH);
     }
@@ -1611,7 +1683,7 @@ function drawBoss() {
       const col = idx % bCols;
       const row = Math.floor(idx / bCols);
       ctx.fillStyle = activeBoss.color;
-      ctx.fillRect(screenX + col * bChunkW, screenY + row * bChunkH, bChunkW, bChunkH);
+      ctx.fillRect(screenX + col * bChunkW, screenY + row * bChunkH + dropY, bChunkW, bChunkH);
     }
   }
 
@@ -1719,9 +1791,10 @@ function updateProjectiles() {
     if (p.trail.length > 3) p.trail.shift();
 
     p.x += p.velX;
-    p.y += Math.sin(p.age * 0.3) * 2 + (p.spread || 0) * 0.8;
+    p.y += (p.velY || 0) + Math.sin(p.age * 0.3) * 0.5;
 
-    if (Math.abs(p.x - player.x) > 600) {
+    if (p.x < camera.x - 50 || p.x > camera.x + canvas.width + 50 ||
+        p.y < -50 || p.y > canvas.height + 50) {
       projectiles.splice(i, 1);
       continue;
     }
@@ -1785,7 +1858,9 @@ function drawProjectiles() {
     const screenY = p.y - camera.y;
     const cx = screenX + PROJECTILE_SIZE / 2;
     const cy = screenY + PROJECTILE_SIZE / 2;
+    const angle = p.angle || 0;
 
+    // Trail: fading rotated laser afterimages
     for (let t = 0; t < p.trail.length; t++) {
       const tr = p.trail[t];
       const trCx = tr.x - camera.x + PROJECTILE_SIZE / 2;
@@ -1794,41 +1869,52 @@ function drawProjectiles() {
 
       ctx.save();
       ctx.globalAlpha = alpha;
+      ctx.translate(trCx, trCy);
+      ctx.rotate(angle);
       ctx.fillStyle = "#fbbf24";
-      ctx.fillRect(trCx - laserLen / 2, trCy - laserH / 4, laserLen, laserH / 2);
+      ctx.fillRect(-laserLen / 2, -laserH / 4, laserLen, laserH / 2);
       ctx.restore();
     }
 
     ctx.save();
+    ctx.translate(cx, cy);
+    ctx.rotate(angle);
+
+    // Outer glow
+    ctx.save();
     ctx.globalAlpha = 0.3;
     ctx.fillStyle = "#fbbf24";
     ctx.beginPath();
-    ctx.ellipse(cx, cy, laserLen / 2 + 4, laserH / 2 + 4, 0, 0, Math.PI * 2);
+    ctx.ellipse(0, 0, laserLen / 2 + 4, laserH / 2 + 4, 0, 0, Math.PI * 2);
     ctx.fill();
     ctx.restore();
 
+    // Laser body (golden)
     ctx.fillStyle = "#fbbf24";
     const r = laserH / 2;
     ctx.beginPath();
-    ctx.moveTo(cx - laserLen / 2 + r, cy - r);
-    ctx.lineTo(cx + laserLen / 2 - r, cy - r);
-    ctx.arc(cx + laserLen / 2 - r, cy, r, -Math.PI / 2, Math.PI / 2);
-    ctx.lineTo(cx - laserLen / 2 + r, cy + r);
-    ctx.arc(cx - laserLen / 2 + r, cy, r, Math.PI / 2, -Math.PI / 2);
+    ctx.moveTo(-laserLen / 2 + r, -r);
+    ctx.lineTo(laserLen / 2 - r, -r);
+    ctx.arc(laserLen / 2 - r, 0, r, -Math.PI / 2, Math.PI / 2);
+    ctx.lineTo(-laserLen / 2 + r, r);
+    ctx.arc(-laserLen / 2 + r, 0, r, Math.PI / 2, -Math.PI / 2);
     ctx.closePath();
     ctx.fill();
 
+    // Bright white core
     ctx.fillStyle = "white";
     const coreH = laserH * 0.35;
     const cr = coreH / 2;
     ctx.beginPath();
-    ctx.moveTo(cx - laserLen / 3 + cr, cy - cr);
-    ctx.lineTo(cx + laserLen / 3 - cr, cy - cr);
-    ctx.arc(cx + laserLen / 3 - cr, cy, cr, -Math.PI / 2, Math.PI / 2);
-    ctx.lineTo(cx - laserLen / 3 + cr, cy + cr);
-    ctx.arc(cx - laserLen / 3 + cr, cy, cr, Math.PI / 2, -Math.PI / 2);
+    ctx.moveTo(-laserLen / 3 + cr, -cr);
+    ctx.lineTo(laserLen / 3 - cr, -cr);
+    ctx.arc(laserLen / 3 - cr, 0, cr, -Math.PI / 2, Math.PI / 2);
+    ctx.lineTo(-laserLen / 3 + cr, cr);
+    ctx.arc(-laserLen / 3 + cr, 0, cr, Math.PI / 2, -Math.PI / 2);
     ctx.closePath();
     ctx.fill();
+
+    ctx.restore();
   }
 }
 
@@ -1839,12 +1925,17 @@ function drawProjectiles() {
 /** Pick random intact chunks from an entity's grid and mark them destroyed */
 function pickRandomChunks(entity, count, totalChunks) {
   if (!entity.destroyedChunks) entity.destroyedChunks = [];
+  // Cap destruction at 50% of total chunks — keeps sprite recognizable until death
+  const maxDestroyed = Math.floor(totalChunks * 0.5);
+  const remaining = maxDestroyed - entity.destroyedChunks.length;
+  if (remaining <= 0) return [];
+  const effectiveCount = Math.min(count, remaining);
   const intact = [];
   for (let i = 0; i < totalChunks; i++) {
     if (!entity.destroyedChunks.includes(i)) intact.push(i);
   }
   const picked = [];
-  for (let i = 0; i < count && intact.length > 0; i++) {
+  for (let i = 0; i < effectiveCount && intact.length > 0; i++) {
     const idx = Math.floor(Math.random() * intact.length);
     picked.push(intact.splice(idx, 1)[0]);
   }
