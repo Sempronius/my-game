@@ -655,11 +655,24 @@ let corvetteMode = false;
 
 const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
 
-// iOS audio unlock — resume on first touch
-document.addEventListener("touchstart", function unlockAudio() {
-  if (audioCtx.state === "suspended") audioCtx.resume();
-  document.removeEventListener("touchstart", unlockAudio);
-}, { once: true });
+// iOS audio unlock — resume context AND play a silent buffer to fully unlock
+// (iOS Safari requires an actual audio node to play during a user gesture)
+let audioUnlocked = false;
+function unlockAudio() {
+  if (audioUnlocked) return;
+  audioCtx.resume().then(() => {
+    // Play a tiny silent buffer to kick iOS audio into working
+    const silentBuf = audioCtx.createBuffer(1, 1, audioCtx.sampleRate);
+    const src = audioCtx.createBufferSource();
+    src.buffer = silentBuf;
+    src.connect(audioCtx.destination);
+    src.start(0);
+    src.onended = () => { audioUnlocked = true; };
+  });
+}
+// Try unlocking on every touch until it works
+document.addEventListener("touchstart", unlockAudio, true);
+document.addEventListener("touchend", unlockAudio, true);
 
 /** Helper: create white noise buffer of given duration */
 function createNoise(duration) {
