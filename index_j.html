@@ -81,12 +81,12 @@ const SKY_COLOR = "#5dadec";
 // =============================================================================
 
 const assets = {
-  player:      { img: new Image(), loaded: false },
-  enemy:       { img: new Image(), loaded: false },
+  player:      { img: new Image(), loaded: false, frames: [] },
+  enemy:       { img: new Image(), loaded: false, frames: [] },
   background:  { img: new Image(), loaded: false },
   portal:      { img: new Image(), loaded: false },
   background2: { img: new Image(), loaded: false },
-  boss:        { img: new Image(), loaded: false },
+  boss:        { img: new Image(), loaded: false, frames: [] },
   car:         { img: new Image(), loaded: false },
 };
 
@@ -100,6 +100,23 @@ function loadImage(asset, src) {
     };
     asset.img.src = src;
   });
+}
+
+/** Load numbered animation frames (e.g. player_j1.png, player_j2.png, ...) */
+async function loadAnimFrames(asset, baseSrc) {
+  asset.frames = asset.loaded ? [asset.img] : [];
+  if (!asset.loaded) return;
+  const prefix = baseSrc.replace(".png", "");
+  for (let n = 1; n <= 20; n++) {
+    const img = new Image();
+    const ok = await new Promise((resolve) => {
+      img.onload = () => resolve(true);
+      img.onerror = () => resolve(false);
+      img.src = prefix + n + ".png";
+    });
+    if (!ok) break;
+    asset.frames.push(img);
+  }
 }
 
 /**
@@ -125,6 +142,13 @@ async function loadAllAssets() {
     loadImage(assets.background2, "background2_j.png"),
     loadImage(assets.boss,        "boss_j.png"),
     loadImage(assets.car,         "car.png"),
+  ]);
+
+  // Load animation frames (numbered variants like player_j1.png, player_j2.png, ...)
+  await Promise.all([
+    loadAnimFrames(assets.player, "player_j.png"),
+    loadAnimFrames(assets.enemy,  "enemy_j.png"),
+    loadAnimFrames(assets.boss,   "boss_j.png"),
   ]);
 
   // Load Level 1 and start the game loop
@@ -186,6 +210,8 @@ const player = {
   maxHp: 12,
   invincibleTimer: 0,   // Frames of invincibility after being hit
   hpBarTimer: 0,        // Countdown for showing health bar
+  animFrame: 0,         // Current animation frame index
+  animTimer: 0,         // Ticks until next frame advance
 
   /** Reset the player back to the start */
   reset() {
@@ -197,6 +223,8 @@ const player = {
     this.hp = this.maxHp;
     this.invincibleTimer = 0;
     this.hpBarTimer = 0;
+    this.animFrame = 0;
+    this.animTimer = 0;
   },
 
   update() {
@@ -226,6 +254,16 @@ const player = {
       startEngine();
     } else {
       stopEngine();
+    }
+
+    // ---- Walk animation ----
+    if (assets.player.frames.length > 1) {
+      const animSpeed = moving ? 12 : 24;
+      this.animTimer++;
+      if (this.animTimer >= animSpeed) {
+        this.animTimer = 0;
+        this.animFrame = (this.animFrame + 1) % assets.player.frames.length;
+      }
     }
 
     // ---- Jumping ----
@@ -341,25 +379,26 @@ const player = {
 
     // ---- Draw player sprite (head sticks out above corvette) ----
     if (assets.player.loaded) {
+      const pImg = assets.player.frames.length > 1 ? assets.player.frames[this.animFrame] : assets.player.img;
       ctx.save();
       if (this.facing === -1) {
         ctx.translate(screenX + this.width, screenY);
         ctx.scale(-1, 1);
         if (corvetteMode) {
           // Only draw upper portion — clip below waist
-          ctx.drawImage(assets.player.img,
-            0, 0, assets.player.img.naturalWidth, assets.player.img.naturalHeight * 0.5,
+          ctx.drawImage(pImg,
+            0, 0, pImg.naturalWidth, pImg.naturalHeight * 0.5,
             0, 0, this.width, this.height * 0.5);
         } else {
-          ctx.drawImage(assets.player.img, 0, 0, this.width, this.height);
+          ctx.drawImage(pImg, 0, 0, this.width, this.height);
         }
       } else {
         if (corvetteMode) {
-          ctx.drawImage(assets.player.img,
-            0, 0, assets.player.img.naturalWidth, assets.player.img.naturalHeight * 0.5,
+          ctx.drawImage(pImg,
+            0, 0, pImg.naturalWidth, pImg.naturalHeight * 0.5,
             screenX, screenY, this.width, this.height * 0.5);
         } else {
-          ctx.drawImage(assets.player.img, screenX, screenY, this.width, this.height);
+          ctx.drawImage(pImg, screenX, screenY, this.width, this.height);
         }
       }
       ctx.restore();
@@ -424,12 +463,14 @@ const levels = [
     ],
     enemies: [
       {
-        x: 520, y: 232, width: 42, height: 48,
-        speed: 1.0, direction: 1, minX: 500, maxX: 660, color: "#9b2226",
+        x: 520, y: 184, width: 84, height: 96,
+        speed: 1.0, direction: 1, minX: 500, maxX: 680, color: "#9b2226",
+        hp: 3, maxHp: 3,
       },
       {
-        x: 1520, y: 252, width: 42, height: 48,
-        speed: 1.3, direction: -1, minX: 1500, maxX: 1640, color: "#9b2226",
+        x: 1520, y: 204, width: 84, height: 96,
+        speed: 1.3, direction: -1, minX: 1500, maxX: 1660, color: "#9b2226",
+        hp: 3, maxHp: 3,
       },
     ],
     decorations: [
@@ -478,23 +519,26 @@ const levels = [
       // Boss arena — wide flat ground
       { x: 2100, y: 450, width: 800, height: 50, color: "#5c4033" },
 
-      // Platforms above boss arena for stomping
-      { x: 2200, y: 300, width: 120, height: 20, color: "#6b4f3a" },
-      { x: 2450, y: 280, width: 140, height: 20, color: "#6b4f3a" },
-      { x: 2700, y: 300, width: 120, height: 20, color: "#6b4f3a" },
+      // Platforms above boss arena for stomping (narrow so boss falls through gaps)
+      { x: 2200, y: 300, width: 80, height: 20, color: "#6b4f3a" },
+      { x: 2460, y: 280, width: 80, height: 20, color: "#6b4f3a" },
+      { x: 2720, y: 300, width: 80, height: 20, color: "#6b4f3a" },
     ],
     enemies: [
       {
-        x: 520, y: 252, width: 42, height: 48,
+        x: 520, y: 204, width: 84, height: 96,
         speed: 1.0, direction: 1, minX: 500, maxX: 640, color: "#9b2226",
+        hp: 3, maxHp: 3,
       },
       {
-        x: 950, y: 402, width: 42, height: 48,
-        speed: 1.3, direction: -1, minX: 900, maxX: 1100, color: "#9b2226",
+        x: 900, y: 354, width: 84, height: 96,
+        speed: 1.3, direction: -1, minX: 850, maxX: 1100, color: "#9b2226",
+        hp: 3, maxHp: 3,
       },
       {
-        x: 1770, y: 282, width: 42, height: 48,
+        x: 1750, y: 234, width: 84, height: 96,
         speed: 1.2, direction: 1, minX: 1750, maxX: 1870, color: "#9b2226",
+        hp: 3, maxHp: 3,
       },
     ],
     decorations: [
@@ -514,7 +558,7 @@ const levels = [
     ],
     portal: null,
     boss: {
-      x: 2350, y: 258, width: 160, height: 192,
+      x: 2350, y: 306, width: 120, height: 144,
       speed: 0.6, direction: 1, minX: 2120, maxX: 2880,
       hp: 6, maxHp: 6, color: "#6b21a8",
       invincibleTimer: 0, alive: true,
@@ -1115,6 +1159,29 @@ function playSound(type) {
     ns.connect(ng).connect(audioCtx.destination);
     ns.start(t);
   }
+
+  else if (type === "enemy_hit") {
+    // Short punchy impact: noise burst + mid-frequency thud (~0.1s)
+    const osc = audioCtx.createOscillator();
+    const g = audioCtx.createGain();
+    osc.type = "sine";
+    osc.frequency.setValueAtTime(300, t);
+    osc.frequency.exponentialRampToValueAtTime(100, t + 0.08);
+    g.gain.setValueAtTime(0.12, t);
+    g.gain.exponentialRampToValueAtTime(0.001, t + 0.1);
+    osc.connect(g).connect(audioCtx.destination);
+    osc.start(t); osc.stop(t + 0.1);
+
+    const ns2 = audioCtx.createBufferSource();
+    ns2.buffer = createNoise(0.06);
+    const bp2 = audioCtx.createBiquadFilter();
+    bp2.type = "bandpass"; bp2.frequency.value = 2000; bp2.Q.value = 2;
+    const ng2 = audioCtx.createGain();
+    ng2.gain.setValueAtTime(0.06, t);
+    ng2.gain.exponentialRampToValueAtTime(0.001, t + 0.06);
+    ns2.connect(bp2).connect(ng2).connect(audioCtx.destination);
+    ns2.start(t);
+  }
 }
 
 /** Deep-copy an object (works for plain data) */
@@ -1214,6 +1281,9 @@ function handlePlatformCollisions() {
 
 function updateEnemies() {
   for (const enemy of activeEnemies) {
+    // Decrement invincibility timer
+    if (enemy.invincibleTimer > 0) enemy.invincibleTimer--;
+
     // Move in the current direction
     enemy.x += enemy.speed * enemy.direction;
 
@@ -1235,39 +1305,51 @@ function updateEnemies() {
 }
 
 function drawEnemies() {
+  const cols = 2, rows = 3;
+
   for (const enemy of activeEnemies) {
     const screenX = enemy.x - camera.x;
     const screenY = enemy.y - camera.y;
 
+    // Flash during invincibility (skip draw every other 4-frame block)
+    if (enemy.invincibleTimer > 0 && Math.floor(enemy.invincibleTimer / 4) % 2 === 0) {
+      continue;
+    }
+
+    const chunkW = enemy.width / cols;
+    const chunkH = enemy.height / rows;
+
     if (assets.enemy.loaded) {
-      // Draw enemy sprite, flipped based on patrol direction
+      const img = assets.enemy.img;
+      const srcChunkW = img.naturalWidth / cols;
+      const srcChunkH = img.naturalHeight / rows;
+
       ctx.save();
       if (enemy.direction === -1) {
         ctx.translate(screenX + enemy.width, screenY);
         ctx.scale(-1, 1);
-        ctx.drawImage(assets.enemy.img, 0, 0, enemy.width, enemy.height);
-      } else {
-        ctx.drawImage(assets.enemy.img, screenX, screenY, enemy.width, enemy.height);
+      }
+
+      for (let idx = 0; idx < cols * rows; idx++) {
+        if (enemy.destroyedChunks && enemy.destroyedChunks.includes(idx)) continue;
+        const col = idx % cols;
+        const row = Math.floor(idx / cols);
+        const dx = enemy.direction === -1 ? col * chunkW : screenX + col * chunkW;
+        const dy = enemy.direction === -1 ? row * chunkH : screenY + row * chunkH;
+
+        ctx.drawImage(img,
+          col * srcChunkW, row * srcChunkH, srcChunkW, srcChunkH,
+          dx, dy, chunkW, chunkH);
       }
       ctx.restore();
     } else {
-      // Fallback: colored rectangle with angry face
-      ctx.fillStyle = enemy.color;
-      ctx.fillRect(screenX, screenY, enemy.width, enemy.height);
-      ctx.fillStyle = "white";
-      ctx.fillRect(screenX + 6, screenY + 10, 10, 10);
-      ctx.fillRect(screenX + 26, screenY + 10, 10, 10);
-      ctx.fillStyle = "#1a1a2e";
-      const pupilDir = enemy.direction === 1 ? 4 : 0;
-      ctx.fillRect(screenX + 6 + pupilDir, screenY + 14, 6, 6);
-      ctx.fillRect(screenX + 26 + pupilDir, screenY + 14, 6, 6);
-      ctx.fillStyle = "#1a1a2e";
-      if (enemy.direction === 1) {
-        ctx.fillRect(screenX + 6, screenY + 7, 10, 3);
-        ctx.fillRect(screenX + 29, screenY + 4, 7, 3);
-      } else {
-        ctx.fillRect(screenX + 6, screenY + 4, 7, 3);
-        ctx.fillRect(screenX + 26, screenY + 7, 10, 3);
+      // Fallback: colored rectangle chunks (face details omitted for destruction look)
+      for (let idx = 0; idx < cols * rows; idx++) {
+        if (enemy.destroyedChunks && enemy.destroyedChunks.includes(idx)) continue;
+        const col = idx % cols;
+        const row = Math.floor(idx / cols);
+        ctx.fillStyle = enemy.color;
+        ctx.fillRect(screenX + col * chunkW, screenY + row * chunkH, chunkW, chunkH);
       }
     }
   }
@@ -1363,8 +1445,11 @@ function updateBoss() {
       activeBoss.hp--;
       activeBoss.invincibleTimer = 60;
       player.velY = JUMP_FORCE * 0.7;
+      const stompDestroyed = pickRandomChunks(activeBoss, 1, 16);
+      spawnChunkDebris(activeBoss, stompDestroyed, 4, 4, "boss");
 
       if (activeBoss.hp <= 0) {
+        spawnDeathExplosion(activeBoss, 4, 4, "boss");
         activeBoss.alive = false;
         victoryScreen = true;
         playSound("boss_death");
@@ -1449,52 +1534,41 @@ function drawBoss() {
     return;
   }
 
+  const bCols = 4, bRows = 4;
+  const bChunkW = activeBoss.width / bCols;
+  const bChunkH = activeBoss.height / bRows;
+
   if (assets.boss.loaded) {
+    const img = assets.boss.img;
+    const srcChunkW = img.naturalWidth / bCols;
+    const srcChunkH = img.naturalHeight / bRows;
+
     ctx.save();
     if (activeBoss.direction === -1) {
       ctx.translate(screenX + activeBoss.width, screenY);
       ctx.scale(-1, 1);
-      ctx.drawImage(assets.boss.img, 0, 0, activeBoss.width, activeBoss.height);
-    } else {
-      ctx.drawImage(assets.boss.img, screenX, screenY, activeBoss.width, activeBoss.height);
+    }
+
+    for (let idx = 0; idx < bCols * bRows; idx++) {
+      if (activeBoss.destroyedChunks && activeBoss.destroyedChunks.includes(idx)) continue;
+      const col = idx % bCols;
+      const row = Math.floor(idx / bCols);
+      const dx = activeBoss.direction === -1 ? col * bChunkW : screenX + col * bChunkW;
+      const dy = activeBoss.direction === -1 ? row * bChunkH : screenY + row * bChunkH;
+
+      ctx.drawImage(img,
+        col * srcChunkW, row * srcChunkH, srcChunkW, srcChunkH,
+        dx, dy, bChunkW, bChunkH);
     }
     ctx.restore();
   } else {
-    // Fallback: large purple rectangle with menacing face (scales with boss size)
-    const bw = activeBoss.width;
-    const bh = activeBoss.height;
-    ctx.fillStyle = activeBoss.color;
-    ctx.fillRect(screenX, screenY, bw, bh);
-
-    // Eyes
-    ctx.fillStyle = "#fbbf24";
-    const eyeW = bw * 0.225, eyeH = bh * 0.094;
-    const eyeY = screenY + bh * 0.104;
-    ctx.fillRect(screenX + bw * 0.15, eyeY, eyeW, eyeH);
-    ctx.fillRect(screenX + bw * 0.625, eyeY, eyeW, eyeH);
-    // Pupils
-    ctx.fillStyle = "#dc2626";
-    const pupilW = bw * 0.125, pupilH = bh * 0.052;
-    const pupilDir = activeBoss.direction === 1 ? bw * 0.1 : 0;
-    ctx.fillRect(screenX + bw * 0.15 + pupilDir, eyeY + eyeH * 0.33, pupilW, pupilH);
-    ctx.fillRect(screenX + bw * 0.625 + pupilDir, eyeY + eyeH * 0.33, pupilW, pupilH);
-    // Angry brows
-    ctx.fillStyle = "#1a1a2e";
-    if (activeBoss.direction === 1) {
-      ctx.fillRect(screenX + bw * 0.125, screenY + bh * 0.073, bw * 0.25, bh * 0.026);
-      ctx.fillRect(screenX + bw * 0.69, screenY + bh * 0.052, bw * 0.19, bh * 0.026);
-    } else {
-      ctx.fillRect(screenX + bw * 0.125, screenY + bh * 0.052, bw * 0.19, bh * 0.026);
-      ctx.fillRect(screenX + bw * 0.625, screenY + bh * 0.073, bw * 0.25, bh * 0.026);
-    }
-    // Mouth
-    ctx.fillStyle = "#dc2626";
-    const mouthY = screenY + bh * 0.3125;
-    ctx.fillRect(screenX + bw * 0.25, mouthY, bw * 0.5, bh * 0.0625);
-    ctx.fillStyle = "white";
-    // Teeth
-    for (let t = 0; t < 4; t++) {
-      ctx.fillRect(screenX + bw * 0.275 + t * bw * 0.125, mouthY, bw * 0.075, bh * 0.03);
+    // Fallback: colored rectangle chunks
+    for (let idx = 0; idx < bCols * bRows; idx++) {
+      if (activeBoss.destroyedChunks && activeBoss.destroyedChunks.includes(idx)) continue;
+      const col = idx % bCols;
+      const row = Math.floor(idx / bCols);
+      ctx.fillStyle = activeBoss.color;
+      ctx.fillRect(screenX + col * bChunkW, screenY + row * bChunkH, bChunkW, bChunkH);
     }
   }
 
@@ -1624,14 +1698,23 @@ function updateProjectiles() {
     let hit = false;
     for (let e = activeEnemies.length - 1; e >= 0; e--) {
       const enemy = activeEnemies[e];
+      if (enemy.invincibleTimer > 0) continue;
       if (rectsOverlap(
         { x: p.x, y: p.y, width: PROJECTILE_SIZE, height: PROJECTILE_SIZE },
         enemy
       )) {
-        spawnDeathEffect(enemy);
-        activeEnemies.splice(e, 1);
+        enemy.hp--;
+        if (enemy.hp <= 0) {
+          spawnDeathExplosion(enemy, 2, 3, "enemy");
+          activeEnemies.splice(e, 1);
+          playSound("enemy_death");
+        } else {
+          const destroyed = pickRandomChunks(enemy, 2, 6);
+          spawnChunkDebris(enemy, destroyed, 2, 3, "enemy");
+          enemy.invincibleTimer = 15;
+          playSound("enemy_hit");
+        }
         projectiles.splice(i, 1);
-        playSound("enemy_death");
         hit = true;
         break;
       }
@@ -1646,9 +1729,12 @@ function updateProjectiles() {
       )) {
         activeBoss.hp--;
         activeBoss.invincibleTimer = 60;
+        const bossDestroyed = pickRandomChunks(activeBoss, 1, 16);
+        spawnChunkDebris(activeBoss, bossDestroyed, 4, 4, "boss");
         projectiles.splice(i, 1);
 
         if (activeBoss.hp <= 0) {
+          spawnDeathExplosion(activeBoss, 4, 4, "boss");
           activeBoss.alive = false;
           victoryScreen = true;
           playSound("boss_death");
@@ -1724,95 +1810,130 @@ function drawProjectiles() {
 // ENEMY DEATH EFFECT
 // =============================================================================
 
-function spawnDeathEffect(enemy) {
-  const w = enemy.width;
-  const h = enemy.height;
-  const variant = Math.floor(Math.random() * 3);
-  let pieces;
+/** Pick random intact chunks from an entity's grid and mark them destroyed */
+function pickRandomChunks(entity, count, totalChunks) {
+  if (!entity.destroyedChunks) entity.destroyedChunks = [];
+  const intact = [];
+  for (let i = 0; i < totalChunks; i++) {
+    if (!entity.destroyedChunks.includes(i)) intact.push(i);
+  }
+  const picked = [];
+  for (let i = 0; i < count && intact.length > 0; i++) {
+    const idx = Math.floor(Math.random() * intact.length);
+    picked.push(intact.splice(idx, 1)[0]);
+  }
+  entity.destroyedChunks.push(...picked);
+  return picked;
+}
 
-  if (variant === 0) {
-    // 3 pieces: vertical strips
-    const pw = w / 3;
-    pieces = [
-      // left strip — flies left
-      { x: enemy.x, y: enemy.y, pw: pw, ph: h,
-        sfx: 0, sfy: 0, sfw: 1/3, sfh: 1,
-        velX: -(3 + Math.random() * 2), velY: -(3 + Math.random() * 3),
-        rot: 0, rotSpeed: -(0.1 + Math.random() * 0.2) },
-      // middle strip — flies up
-      { x: enemy.x + pw, y: enemy.y, pw: pw, ph: h,
-        sfx: 1/3, sfy: 0, sfw: 1/3, sfh: 1,
-        velX: (Math.random() - 0.5) * 2, velY: -(5 + Math.random() * 3),
-        rot: 0, rotSpeed: (Math.random() - 0.5) * 0.3 },
-      // right strip — flies right
-      { x: enemy.x + pw * 2, y: enemy.y, pw: pw, ph: h,
-        sfx: 2/3, sfy: 0, sfw: 1/3, sfh: 1,
-        velX: 3 + Math.random() * 2, velY: -(3 + Math.random() * 3),
-        rot: 0, rotSpeed: 0.1 + Math.random() * 0.2 },
-    ];
-  } else if (variant === 1) {
-    // 4 pieces: quadrants
-    const hw = w / 2;
-    const hh = h / 2;
-    pieces = [
-      { x: enemy.x, y: enemy.y, pw: hw, ph: hh,
-        sfx: 0, sfy: 0, sfw: 0.5, sfh: 0.5,
-        velX: -(3 + Math.random() * 2), velY: -(4 + Math.random() * 2),
-        rot: 0, rotSpeed: -(0.1 + Math.random() * 0.2) },
-      { x: enemy.x + hw, y: enemy.y, pw: hw, ph: hh,
-        sfx: 0.5, sfy: 0, sfw: 0.5, sfh: 0.5,
-        velX: 3 + Math.random() * 2, velY: -(4 + Math.random() * 2),
-        rot: 0, rotSpeed: 0.1 + Math.random() * 0.2 },
-      { x: enemy.x, y: enemy.y + hh, pw: hw, ph: hh,
-        sfx: 0, sfy: 0.5, sfw: 0.5, sfh: 0.5,
-        velX: -(3 + Math.random() * 2), velY: -(1 + Math.random() * 2),
-        rot: 0, rotSpeed: -(0.1 + Math.random() * 0.2) },
-      { x: enemy.x + hw, y: enemy.y + hh, pw: hw, ph: hh,
-        sfx: 0.5, sfy: 0.5, sfw: 0.5, sfh: 0.5,
-        velX: 3 + Math.random() * 2, velY: -(1 + Math.random() * 2),
-        rot: 0, rotSpeed: 0.1 + Math.random() * 0.2 },
-    ];
-  } else {
-    // 5 pieces: cross pattern (top, left, center, right, bottom)
-    const tw = w / 3;
-    const th = h / 3;
-    pieces = [
-      // top — flies up
-      { x: enemy.x + tw, y: enemy.y, pw: tw, ph: th,
-        sfx: 1/3, sfy: 0, sfw: 1/3, sfh: 1/3,
-        velX: (Math.random() - 0.5) * 3, velY: -(6 + Math.random() * 2),
-        rot: 0, rotSpeed: (Math.random() - 0.5) * 0.3 },
-      // left — flies left
-      { x: enemy.x, y: enemy.y + th, pw: tw, ph: th,
-        sfx: 0, sfy: 1/3, sfw: 1/3, sfh: 1/3,
-        velX: -(4 + Math.random() * 2), velY: -(2 + Math.random() * 2),
-        rot: 0, rotSpeed: -(0.15 + Math.random() * 0.2) },
-      // center — flies straight up
-      { x: enemy.x + tw, y: enemy.y + th, pw: tw, ph: th,
-        sfx: 1/3, sfy: 1/3, sfw: 1/3, sfh: 1/3,
-        velX: (Math.random() - 0.5) * 2, velY: -(5 + Math.random() * 3),
-        rot: 0, rotSpeed: (Math.random() - 0.5) * 0.4 },
-      // right — flies right
-      { x: enemy.x + tw * 2, y: enemy.y + th, pw: tw, ph: th,
-        sfx: 2/3, sfy: 1/3, sfw: 1/3, sfh: 1/3,
-        velX: 4 + Math.random() * 2, velY: -(2 + Math.random() * 2),
-        rot: 0, rotSpeed: 0.15 + Math.random() * 0.2 },
-      // bottom — pops up slightly
-      { x: enemy.x + tw, y: enemy.y + th * 2, pw: tw, ph: th,
-        sfx: 1/3, sfy: 2/3, sfw: 1/3, sfh: 1/3,
-        velX: (Math.random() - 0.5) * 3, velY: -(1 + Math.random() * 2),
-        rot: 0, rotSpeed: (Math.random() - 0.5) * 0.3 },
-    ];
+/** Spawn small debris particles when chunks are destroyed (non-fatal hit) */
+function spawnChunkDebris(entity, chunkIndices, cols, rows, assetKey) {
+  const chunkW = entity.width / cols;
+  const chunkH = entity.height / rows;
+  const centerX = entity.x + entity.width / 2;
+  const centerY = entity.y + entity.height / 2;
+  const pieces = [];
+
+  for (const idx of chunkIndices) {
+    const col = idx % cols;
+    const row = Math.floor(idx / cols);
+    const px = entity.x + col * chunkW;
+    const py = entity.y + row * chunkH;
+    const dx = px + chunkW / 2 - centerX;
+    const dy = py + chunkH / 2 - centerY;
+    const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+
+    const count = 3 + Math.floor(Math.random() * 2);
+    for (let i = 0; i < count; i++) {
+      const subW = chunkW * (0.3 + Math.random() * 0.4);
+      const subH = chunkH * (0.3 + Math.random() * 0.4);
+      pieces.push({
+        x: px + Math.random() * (chunkW - subW),
+        y: py + Math.random() * (chunkH - subH),
+        pw: subW, ph: subH,
+        sfx: (col + Math.random() * 0.5) / cols,
+        sfy: (row + Math.random() * 0.5) / rows,
+        sfw: subW / entity.width,
+        sfh: subH / entity.height,
+        velX: (dx / dist) * (2 + Math.random() * 3) + (Math.random() - 0.5) * 2,
+        velY: -(2 + Math.random() * 3),
+        rot: 0,
+        rotSpeed: (Math.random() - 0.5) * 0.4,
+      });
+    }
   }
 
   deathEffects.push({
-    width: w,
-    height: h,
-    color: enemy.color,
-    direction: enemy.direction,
+    width: entity.width,
+    height: entity.height,
+    color: entity.color,
+    direction: entity.direction,
+    assetKey: assetKey,
     pieces: pieces,
-    timer: 45,
-    maxTimer: 45,
+    timer: 30,
+    maxTimer: 30,
+  });
+}
+
+/** Spawn a big explosion when an entity dies — remaining chunks fly off */
+function spawnDeathExplosion(entity, cols, rows, assetKey) {
+  const chunkW = entity.width / cols;
+  const chunkH = entity.height / rows;
+  const totalChunks = cols * rows;
+  const centerX = entity.x + entity.width / 2;
+  const centerY = entity.y + entity.height / 2;
+  if (!entity.destroyedChunks) entity.destroyedChunks = [];
+
+  const pieces = [];
+  for (let idx = 0; idx < totalChunks; idx++) {
+    if (entity.destroyedChunks.includes(idx)) continue;
+    const col = idx % cols;
+    const row = Math.floor(idx / cols);
+    const px = entity.x + col * chunkW;
+    const py = entity.y + row * chunkH;
+    const dx = px + chunkW / 2 - centerX;
+    const dy = py + chunkH / 2 - centerY;
+    const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+
+    // Main chunk piece
+    pieces.push({
+      x: px, y: py, pw: chunkW, ph: chunkH,
+      sfx: col / cols, sfy: row / rows,
+      sfw: 1 / cols, sfh: 1 / rows,
+      velX: (dx / dist) * (4 + Math.random() * 3) + (Math.random() - 0.5) * 2,
+      velY: -(4 + Math.random() * 4),
+      rot: 0,
+      rotSpeed: (Math.random() - 0.5) * 0.3,
+    });
+
+    // 2-3 tiny sub-particles per chunk
+    const subCount = 2 + Math.floor(Math.random() * 2);
+    for (let s = 0; s < subCount; s++) {
+      const subW = chunkW * 0.3;
+      const subH = chunkH * 0.3;
+      pieces.push({
+        x: px + Math.random() * chunkW,
+        y: py + Math.random() * chunkH,
+        pw: subW, ph: subH,
+        sfx: col / cols, sfy: row / rows,
+        sfw: 0.3 / cols, sfh: 0.3 / rows,
+        velX: (dx / dist) * (3 + Math.random() * 4) + (Math.random() - 0.5) * 4,
+        velY: -(3 + Math.random() * 5),
+        rot: 0,
+        rotSpeed: (Math.random() - 0.5) * 0.5,
+      });
+    }
+  }
+
+  deathEffects.push({
+    width: entity.width,
+    height: entity.height,
+    color: entity.color,
+    direction: entity.direction,
+    assetKey: assetKey,
+    pieces: pieces,
+    timer: 60,
+    maxTimer: 60,
   });
 }
 
@@ -1847,8 +1968,9 @@ function drawDeathEffects() {
       ctx.translate(screenX + piece.pw / 2, screenY + piece.ph / 2);
       ctx.rotate(piece.rot);
 
-      if (assets.enemy.loaded) {
-        const img = assets.enemy.img;
+      const effAsset = eff.assetKey ? assets[eff.assetKey] : assets.enemy;
+      if (effAsset && effAsset.loaded) {
+        const img = effAsset.img;
 
         ctx.save();
         if (eff.direction === -1) {
