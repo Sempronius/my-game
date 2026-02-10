@@ -420,6 +420,7 @@ const player = {
     this.aimAngle = 0;
     this.beamActive = false;
     this.beamAngle = 0;
+    stopBeamSound();
   },
 
   update() {
@@ -474,7 +475,9 @@ const player = {
     if (hasSword && shifting) {
       this.beamActive = true;
       this.beamAngle = fireAngle;
+      startBeamSound();
     } else {
+      if (this.beamActive) stopBeamSound();
       this.beamActive = false;
 
       if (shifting && shootCooldown === 0) {
@@ -912,6 +915,136 @@ function stopEngine() {
     try { nodes.noise.stop(); } catch(e) {}
     nodes.gainMaster.disconnect();
   }, 250);
+}
+
+// --- Persistent lightsaber hum for beam weapon ---
+let beamSoundNodes = null;
+
+function startBeamSound() {
+  if (beamSoundNodes) return;
+  if (audioCtx.state === "suspended") audioCtx.resume();
+  const t = audioCtx.currentTime;
+
+  // === Ignition zap — one-shot on activation ===
+  const ign = audioCtx.createOscillator();
+  const ignG = audioCtx.createGain();
+  const ignLp = audioCtx.createBiquadFilter();
+  ign.type = "sawtooth";
+  ign.frequency.setValueAtTime(80, t);
+  ign.frequency.exponentialRampToValueAtTime(220, t + 0.08);
+  ign.frequency.exponentialRampToValueAtTime(120, t + 0.2);
+  ignLp.type = "lowpass";
+  ignLp.frequency.setValueAtTime(400, t);
+  ignLp.frequency.exponentialRampToValueAtTime(3000, t + 0.06);
+  ignLp.frequency.exponentialRampToValueAtTime(800, t + 0.2);
+  ignLp.Q.value = 5;
+  ignG.gain.setValueAtTime(0.18, t);
+  ignG.gain.setValueAtTime(0.18, t + 0.05);
+  ignG.gain.exponentialRampToValueAtTime(0.001, t + 0.25);
+  ign.connect(ignLp).connect(ignG).connect(audioCtx.destination);
+  ign.start(t); ign.stop(t + 0.25);
+
+  // Ignition high crackle
+  const ignNoise = audioCtx.createBufferSource();
+  ignNoise.buffer = createNoise(0.15);
+  const ignBp = audioCtx.createBiquadFilter();
+  ignBp.type = "bandpass"; ignBp.frequency.value = 5000; ignBp.Q.value = 3;
+  const ignNg = audioCtx.createGain();
+  ignNg.gain.setValueAtTime(0.08, t);
+  ignNg.gain.exponentialRampToValueAtTime(0.001, t + 0.12);
+  ignNoise.connect(ignBp).connect(ignNg).connect(audioCtx.destination);
+  ignNoise.start(t);
+
+  // === Persistent hum layers ===
+
+  // Layer 1: Core hum — sawtooth at ~120Hz through resonant lowpass
+  const hum1 = audioCtx.createOscillator();
+  const hum1G = audioCtx.createGain();
+  const hum1Lp = audioCtx.createBiquadFilter();
+  hum1.type = "sawtooth";
+  hum1.frequency.value = 120;
+  hum1Lp.type = "lowpass"; hum1Lp.frequency.value = 500; hum1Lp.Q.value = 4;
+  hum1G.gain.value = 0.07;
+  hum1.connect(hum1Lp).connect(hum1G);
+
+  // Layer 2: Detuned second oscillator for thickness
+  const hum2 = audioCtx.createOscillator();
+  const hum2G = audioCtx.createGain();
+  hum2.type = "sawtooth";
+  hum2.frequency.value = 121.5;
+  hum2G.gain.value = 0.05;
+  hum2.connect(hum2G);
+
+  // Layer 3: Higher harmonic buzz — square at 240Hz for electric edge
+  const buzz = audioCtx.createOscillator();
+  const buzzG = audioCtx.createGain();
+  const buzzBp = audioCtx.createBiquadFilter();
+  buzz.type = "square";
+  buzz.frequency.value = 240;
+  buzzBp.type = "bandpass"; buzzBp.frequency.value = 600; buzzBp.Q.value = 3;
+  buzzG.gain.value = 0.03;
+  buzz.connect(buzzBp).connect(buzzG);
+
+  // Layer 4: LFO for alive, wavering feel
+  const lfo = audioCtx.createOscillator();
+  const lfoG = audioCtx.createGain();
+  lfo.type = "sine";
+  lfo.frequency.value = 5;
+  lfoG.gain.value = 3;
+  lfo.connect(lfoG);
+  lfoG.connect(hum1.frequency);
+  lfoG.connect(hum2.frequency);
+  lfoG.connect(buzz.frequency);
+
+  // Layer 5: Filtered noise hiss for plasma texture
+  const nBuf = createNoise(2);
+  const noise = audioCtx.createBufferSource();
+  noise.buffer = nBuf;
+  noise.loop = true;
+  const nBp = audioCtx.createBiquadFilter();
+  nBp.type = "bandpass"; nBp.frequency.value = 2000; nBp.Q.value = 2;
+  const nG = audioCtx.createGain();
+  nG.gain.value = 0.015;
+  noise.connect(nBp).connect(nG);
+
+  // Waveshaper for grit
+  const ws = audioCtx.createWaveShaper();
+  const curve = new Float32Array(256);
+  for (let i = 0; i < 256; i++) { const x = (i / 128) - 1; curve[i] = Math.tanh(x * 3); }
+  ws.curve = curve;
+
+  // Master gain with fade-in
+  const gainMaster = audioCtx.createGain();
+  gainMaster.gain.setValueAtTime(0, t);
+  gainMaster.gain.linearRampToValueAtTime(1, t + 0.1);
+
+  hum1G.connect(ws);
+  hum2G.connect(ws);
+  buzzG.connect(ws);
+  ws.connect(gainMaster);
+  nG.connect(gainMaster);
+  gainMaster.connect(audioCtx.destination);
+
+  hum1.start(); hum2.start(); buzz.start(); lfo.start(); noise.start();
+
+  beamSoundNodes = { hum1, hum2, buzz, lfo, noise, gainMaster };
+}
+
+function stopBeamSound() {
+  if (!beamSoundNodes) return;
+  const t = audioCtx.currentTime;
+  beamSoundNodes.gainMaster.gain.setValueAtTime(beamSoundNodes.gainMaster.gain.value, t);
+  beamSoundNodes.gainMaster.gain.linearRampToValueAtTime(0, t + 0.15);
+  const nodes = beamSoundNodes;
+  beamSoundNodes = null;
+  setTimeout(() => {
+    try { nodes.hum1.stop(); } catch(e) {}
+    try { nodes.hum2.stop(); } catch(e) {}
+    try { nodes.buzz.stop(); } catch(e) {}
+    try { nodes.lfo.stop(); } catch(e) {}
+    try { nodes.noise.stop(); } catch(e) {}
+    nodes.gainMaster.disconnect();
+  }, 200);
 }
 
 function playSound(type) {
