@@ -200,13 +200,20 @@ const SKY_COLOR = "#5dadec";
 // =============================================================================
 
 const assets = {
-  player:      { img: new Image(), loaded: false, frames: [] },
-  enemy:       { img: new Image(), loaded: false, frames: [] },
-  background:  { img: new Image(), loaded: false },
-  portal:      { img: new Image(), loaded: false },
-  background2: { img: new Image(), loaded: false },
-  boss:        { img: new Image(), loaded: false, frames: [] },
-  car:         { img: new Image(), loaded: false },
+  player:          { img: new Image(), loaded: false, frames: [] },
+  enemy:           { img: new Image(), loaded: false, frames: [] },
+  background:      { img: new Image(), loaded: false },
+  portal:          { img: new Image(), loaded: false },
+  background2:     { img: new Image(), loaded: false },
+  boss:            { img: new Image(), loaded: false, frames: [] },
+  car:             { img: new Image(), loaded: false },
+  secretDoor:      { img: new Image(), loaded: false },
+  secretDoorBroken:{ img: new Image(), loaded: false },
+  secretCave:      { img: new Image(), loaded: false, frames: [] },
+  poodle:          { img: new Image(), loaded: false, frames: [] },
+  poodleTalk:      { img: new Image(), loaded: false, frames: [] },
+  sword:           { img: new Image(), loaded: false, frames: [] },
+  poodleCar:       { img: new Image(), loaded: false },
 };
 
 function loadImage(asset, src) {
@@ -256,20 +263,31 @@ async function loadAllAssets() {
   ctx.textAlign = "left";
 
   await Promise.all([
-    loadImage(assets.player,      "player_j.png"),
-    loadImage(assets.enemy,       "enemy_j.png"),
-    loadImage(assets.background,  "background_j.png"),
-    loadImage(assets.portal,      "portal_j.png"),
-    loadImage(assets.background2, "background2_j.png"),
-    loadImage(assets.boss,        "boss_j.png"),
-    loadImage(assets.car,         "car.png"),
+    loadImage(assets.player,          "player_j.png"),
+    loadImage(assets.enemy,           "enemy_j.png"),
+    loadImage(assets.background,      "background_j.png"),
+    loadImage(assets.portal,          "portal_j.png"),
+    loadImage(assets.background2,     "background2_j.png"),
+    loadImage(assets.boss,            "boss_j.png"),
+    loadImage(assets.car,             "car.png"),
+    loadImage(assets.secretDoor,      "secret_door_j.png"),
+    loadImage(assets.secretDoorBroken,"secret_door_broken_j.png"),
+    loadImage(assets.secretCave,      "secret_cave_j.png"),
+    loadImage(assets.poodle,          "poodle_j.png"),
+    loadImage(assets.poodleTalk,      "poodle_talk_j.png"),
+    loadImage(assets.sword,           "sword_j.png"),
+    loadImage(assets.poodleCar,       "poodle_car_j.png"),
   ]);
 
   // Load animation frames (numbered variants like player_j1.png, player_j2.png, ...)
   await Promise.all([
-    loadAnimFrames(assets.player, "player_j.png"),
-    loadAnimFrames(assets.enemy,  "enemy_j.png"),
-    loadAnimFrames(assets.boss,   "boss_j.png"),
+    loadAnimFrames(assets.player,     "player_j.png"),
+    loadAnimFrames(assets.enemy,      "enemy_j.png"),
+    loadAnimFrames(assets.boss,       "boss_j.png"),
+    loadAnimFrames(assets.secretCave, "secret_cave_j.png"),
+    loadAnimFrames(assets.poodle,     "poodle_j.png"),
+    loadAnimFrames(assets.poodleTalk, "poodle_talk_j.png"),
+    loadAnimFrames(assets.sword,      "sword_j.png"),
   ]);
 
   loadLevel(0);
@@ -342,6 +360,10 @@ canvas.addEventListener("touchstart", () => {
 // R key still works for restart
 window.addEventListener("keydown", (e) => {
   if (e.code === "KeyR" && victoryScreen) {
+    hasSword = false;
+    isPoodle = false;
+    poodleMode = false;
+    secretLevelState = null;
     loadLevel(0);
   }
 });
@@ -381,6 +403,8 @@ const player = {
   animFrame: 0,
   animTimer: 0,
   aimAngle: 0,
+  beamActive: false,
+  beamAngle: 0,
 
   reset() {
     this.x = 100;
@@ -394,6 +418,8 @@ const player = {
     this.animFrame = 0;
     this.animTimer = 0;
     this.aimAngle = 0;
+    this.beamActive = false;
+    this.beamAngle = 0;
   },
 
   update() {
@@ -422,12 +448,13 @@ const player = {
     }
 
     // ---- Walk animation ----
-    if (assets.player.frames.length > 1) {
+    const animAsset = isPoodle ? assets.poodle : assets.player;
+    if (animAsset.frames.length > 1) {
       const animSpeed = moving ? 12 : 24;
       this.animTimer++;
       if (this.animTimer >= animSpeed) {
         this.animTimer = 0;
-        this.animFrame = (this.animFrame + 1) % assets.player.frames.length;
+        this.animFrame = (this.animFrame + 1) % animAsset.frames.length;
       }
     }
 
@@ -442,38 +469,47 @@ const player = {
 
     // ---- Shooting: Shift fires in aimed direction ----
     if (shootCooldown > 0) shootCooldown--;
-    if ((keys["ShiftLeft"] || keys["ShiftRight"]) && shootCooldown === 0) {
-      if (corvetteMode) {
-        for (const spread of [-1, 0, 1]) {
-          const sa = fireAngle + spread * 0.15;
+    const shifting = keys["ShiftLeft"] || keys["ShiftRight"];
+
+    if (hasSword && shifting) {
+      this.beamActive = true;
+      this.beamAngle = fireAngle;
+    } else {
+      this.beamActive = false;
+
+      if (shifting && shootCooldown === 0) {
+        if (corvetteMode) {
+          for (const spread of [-1, 0, 1]) {
+            const sa = fireAngle + spread * 0.15;
+            projectiles.push({
+              x: this.x + this.width / 2 - PROJECTILE_SIZE / 2,
+              y: this.y + this.height / 2 - PROJECTILE_SIZE / 2,
+              velX: Math.cos(sa) * PROJECTILE_SPEED,
+              velY: Math.sin(sa) * PROJECTILE_SPEED,
+              angle: sa,
+              facing: this.facing,
+              age: 0,
+              trail: [],
+              spread: spread,
+            });
+          }
+          playSound("shoot_triple");
+        } else {
           projectiles.push({
             x: this.x + this.width / 2 - PROJECTILE_SIZE / 2,
             y: this.y + this.height / 2 - PROJECTILE_SIZE / 2,
-            velX: Math.cos(sa) * PROJECTILE_SPEED,
-            velY: Math.sin(sa) * PROJECTILE_SPEED,
-            angle: sa,
+            velX: Math.cos(fireAngle) * PROJECTILE_SPEED,
+            velY: Math.sin(fireAngle) * PROJECTILE_SPEED,
+            angle: fireAngle,
             facing: this.facing,
             age: 0,
             trail: [],
-            spread: spread,
+            spread: 0,
           });
+          playSound("shoot");
         }
-        playSound("shoot_triple");
-      } else {
-        projectiles.push({
-          x: this.x + this.width / 2 - PROJECTILE_SIZE / 2,
-          y: this.y + this.height / 2 - PROJECTILE_SIZE / 2,
-          velX: Math.cos(fireAngle) * PROJECTILE_SPEED,
-          velY: Math.sin(fireAngle) * PROJECTILE_SPEED,
-          angle: fireAngle,
-          facing: this.facing,
-          age: 0,
-          trail: [],
-          spread: 0,
-        });
-        playSound("shoot");
+        shootCooldown = SHOOT_COOLDOWN;
       }
-      shootCooldown = SHOOT_COOLDOWN;
     }
 
     this.velY += GRAVITY;
@@ -507,19 +543,19 @@ const player = {
       const carX = screenX + this.width / 2 - carW / 2;
       const carY = screenY + this.height - carH - 2;
 
-      if (assets.car.loaded) {
+      const carAsset = (isPoodle && poodleMode && assets.poodleCar.loaded) ? assets.poodleCar : assets.car;
+
+      if (carAsset.loaded) {
         ctx.save();
-        // car.png faces LEFT; flip when player faces right
         if (this.facing === 1) {
           ctx.translate(carX + carW, carY);
           ctx.scale(-1, 1);
-          ctx.drawImage(assets.car.img, 0, 0, carW, carH);
+          ctx.drawImage(carAsset.img, 0, 0, carW, carH);
         } else {
-          ctx.drawImage(assets.car.img, carX, carY, carW, carH);
+          ctx.drawImage(carAsset.img, carX, carY, carW, carH);
         }
         ctx.restore();
       } else {
-        // Fallback: simple red rectangle car shape
         ctx.save();
         if (this.facing === -1) {
           ctx.translate(screenX + this.width / 2, 0);
@@ -528,7 +564,7 @@ const player = {
         }
         ctx.fillStyle = "rgba(0,0,0,0.3)";
         ctx.fillRect(carX + 5, carY + carH - 2, carW - 10, 6);
-        ctx.fillStyle = "#cc0000";
+        ctx.fillStyle = isPoodle ? "#f9a8d4" : "#cc0000";
         ctx.fillRect(carX + 4, carY + 4, carW - 8, carH - 8);
         ctx.fillStyle = "#222";
         ctx.beginPath();
@@ -541,8 +577,12 @@ const player = {
       }
     }
 
-    if (assets.player.loaded) {
-      const pImg = assets.player.frames.length > 1 ? assets.player.frames[this.animFrame] : assets.player.img;
+    // ---- Choose sprite: poodle or player ----
+    const spriteAsset = isPoodle ? assets.poodle : assets.player;
+    const spriteLoaded = isPoodle ? (assets.poodle.loaded || assets.poodle.frames.length > 0) : assets.player.loaded;
+
+    if (spriteLoaded) {
+      const pImg = spriteAsset.frames.length > 1 ? spriteAsset.frames[this.animFrame % spriteAsset.frames.length] : spriteAsset.img;
       ctx.save();
       if (this.facing === -1) {
         ctx.translate(screenX + this.width, screenY);
@@ -565,8 +605,9 @@ const player = {
       }
       ctx.restore();
     } else {
+      const fallbackColor = isPoodle ? "#f9a8d4" : this.color;
       if (corvetteMode) {
-        ctx.fillStyle = this.color;
+        ctx.fillStyle = fallbackColor;
         ctx.fillRect(screenX, screenY, this.width, this.height * 0.5);
         ctx.fillStyle = "white";
         const eyeOffsetX = this.facing === 1 ? 28 : 8;
@@ -575,7 +616,7 @@ const player = {
         const pupilOffsetX = this.facing === 1 ? 34 : 8;
         ctx.fillRect(screenX + pupilOffsetX, screenY + 12, 6, 6);
       } else {
-        ctx.fillStyle = this.color;
+        ctx.fillStyle = fallbackColor;
         ctx.fillRect(screenX, screenY, this.width, this.height);
         ctx.fillStyle = "white";
         const eyeOffsetX = this.facing === 1 ? 28 : 8;
@@ -583,6 +624,23 @@ const player = {
         ctx.fillStyle = "#1a1a2e";
         const pupilOffsetX = this.facing === 1 ? 34 : 8;
         ctx.fillRect(screenX + pupilOffsetX, screenY + 20, 6, 6);
+      }
+    }
+
+    // ---- Sword on player's side ----
+    if (hasSword && !corvetteMode) {
+      const swordW = 16;
+      const swordH = 32;
+      const swordOffsetX = this.facing === 1 ? -swordW + 4 : this.width - 4;
+      const swordOffsetY = this.height / 2 - swordH / 2;
+
+      if (assets.sword.loaded) {
+        ctx.drawImage(assets.sword.img, screenX + swordOffsetX, screenY + swordOffsetY, swordW, swordH);
+      } else {
+        ctx.fillStyle = "#fbbf24";
+        ctx.fillRect(screenX + swordOffsetX + swordW / 2 - 2, screenY + swordOffsetY, 4, swordH - 8);
+        ctx.fillStyle = "#8b6914";
+        ctx.fillRect(screenX + swordOffsetX, screenY + swordOffsetY + swordH - 10, swordW, 4);
       }
     }
 
@@ -699,6 +757,18 @@ const levels = [
       jumpTimer: 150, shootTimer: 120,
     },
   },
+
+  // ---- SECRET LEVEL 3 (Poodle Cave) ----
+  {
+    backgroundKey: "secretCave",
+    platforms: [
+      { x: 0, y: 450, width: 800, height: 50, color: "#3a2a1a" },
+    ],
+    enemies: [],
+    decorations: [],
+    portal: null,
+    boss: null,
+  },
 ];
 
 // =============================================================================
@@ -725,6 +795,16 @@ let victoryScreen = false;
 
 // Secret corvette mode
 let corvetteMode = false;
+
+// Secret level state
+let secretDoor = null;
+let hasSword = false;
+let isPoodle = false;
+let poodleMode = false;
+let secretLevelState = null;
+let secretCaveAnimTimer = 0;
+let secretCaveAnimFrame = 0;
+let beamDamageTimer = 0;
 
 // =============================================================================
 // WEB AUDIO API — PROCEDURAL SOUND EFFECTS (zero file size)
@@ -1302,6 +1382,34 @@ secretBtn.addEventListener("click", (e) => {
   secretBtn.classList.toggle("active", corvetteMode);
 });
 
+// Secret level choice button handler (canvas touch/click)
+function handleSecretChoice(clientX, clientY) {
+  if (!secretLevelState || secretLevelState.phase !== "choice" || secretLevelState.choiceMade !== null) return;
+  const rect = canvas.getBoundingClientRect();
+  const scaleX = canvas.width / rect.width;
+  const scaleY = canvas.height / rect.height;
+  const cx = (clientX - rect.left) * scaleX;
+  const cy = (clientY - rect.top) * scaleY;
+
+  for (let i = 0; i < SECRET_CHOICE_BUTTONS.length; i++) {
+    const btn = SECRET_CHOICE_BUTTONS[i];
+    if (cx >= btn.x && cx <= btn.x + btn.width && cy >= btn.y && cy <= btn.y + btn.height) {
+      secretLevelState.choiceMade = i;
+      playSound("jump");
+      return;
+    }
+  }
+}
+canvas.addEventListener("touchstart", (e) => {
+  if (secretLevelState && secretLevelState.phase === "choice") {
+    const t = e.touches[0];
+    handleSecretChoice(t.clientX, t.clientY);
+  }
+}, { passive: true });
+canvas.addEventListener("click", (e) => {
+  handleSecretChoice(e.clientX, e.clientY);
+});
+
 function deepCopy(obj) {
   return JSON.parse(JSON.stringify(obj));
 }
@@ -1325,6 +1433,42 @@ function loadLevel(index) {
   camera.x = 0;
   camera.y = 0;
   victoryScreen = false;
+
+  // Secret door on Level 1
+  if (index === 0) {
+    const floatingIndices = [1, 2, 3, 4, 6, 7, 8, 9];
+    const pick = floatingIndices[Math.floor(Math.random() * floatingIndices.length)];
+    const plat = activePlatforms[pick];
+    secretDoor = {
+      x: plat.x + plat.width / 2 - 24,
+      y: plat.y - 64,
+      width: 48, height: 64,
+      hp: 5, maxHp: 5,
+      broken: false,
+      hpBarTimer: 0,
+    };
+  } else {
+    secretDoor = null;
+  }
+
+  // Secret level initialization
+  if (index === 2) {
+    secretLevelState = {
+      phase: "walk",
+      npc: { x: 650, y: 450 - 80, width: 60, height: 80, animFrame: 0, animTimer: 0, facing: -1 },
+      dialogueTimer: 0,
+      dialogueChars: 0,
+      fullDialogue: "It's dangerous to go alone, here, take this",
+      swordY: -50,
+      swordTargetY: 220,
+      swordAnimFrame: 0,
+      swordAnimTimer: 0,
+      choiceMade: null,
+      exitTimer: 0,
+    };
+  } else {
+    secretLevelState = null;
+  }
 }
 
 function startTransition(toLevel) {
@@ -1707,6 +1851,381 @@ function drawBossHealthBar(screenX, screenY) {
 }
 
 // =============================================================================
+// SECRET DOOR LOGIC
+// =============================================================================
+
+function spawnDoorDebris(door) {
+  const pieces = [];
+  const count = 4 + Math.floor(Math.random() * 3);
+  for (let i = 0; i < count; i++) {
+    const pw = 6 + Math.random() * 8;
+    const ph = 6 + Math.random() * 8;
+    pieces.push({
+      x: door.x + Math.random() * door.width,
+      y: door.y + Math.random() * door.height,
+      pw: pw, ph: ph,
+      sfx: Math.random(), sfy: Math.random(),
+      sfw: pw / door.width, sfh: ph / door.height,
+      velX: (Math.random() - 0.5) * 6,
+      velY: -(2 + Math.random() * 4),
+      rot: 0,
+      rotSpeed: (Math.random() - 0.5) * 0.4,
+    });
+  }
+  deathEffects.push({
+    width: door.width, height: door.height,
+    color: "#8b5e3c",
+    direction: 1,
+    assetKey: "secretDoor",
+    pieces: pieces,
+    timer: 30, maxTimer: 30,
+  });
+}
+
+function updateSecretDoor() {
+  if (!secretDoor) return;
+  if (secretDoor.hpBarTimer > 0) secretDoor.hpBarTimer--;
+
+  if (secretDoor.broken && transitionTimer === 0) {
+    if (rectsOverlap(player, secretDoor)) {
+      startTransition(2);
+    }
+  }
+}
+
+function drawSecretDoor() {
+  if (!secretDoor) return;
+
+  const screenX = secretDoor.x - camera.x;
+  const screenY = secretDoor.y - camera.y;
+
+  if (secretDoor.broken) {
+    const pulse = Math.sin(portalAnimTimer) * 0.3 + 0.7;
+    ctx.save();
+    ctx.globalAlpha = pulse * 0.4;
+    ctx.fillStyle = "#a78bfa";
+    ctx.beginPath();
+    ctx.ellipse(
+      screenX + secretDoor.width / 2,
+      screenY + secretDoor.height / 2,
+      secretDoor.width / 2 + 10,
+      secretDoor.height / 2 + 10,
+      0, 0, Math.PI * 2
+    );
+    ctx.fill();
+    ctx.globalAlpha = 1;
+    ctx.restore();
+
+    if (assets.secretDoorBroken.loaded) {
+      ctx.save();
+      ctx.globalAlpha = 0.7 + pulse * 0.3;
+      ctx.drawImage(assets.secretDoorBroken.img, screenX, screenY, secretDoor.width, secretDoor.height);
+      ctx.restore();
+    } else {
+      ctx.save();
+      ctx.globalAlpha = 0.7 + pulse * 0.3;
+      ctx.fillStyle = "#6b3fa0";
+      ctx.fillRect(screenX, screenY, secretDoor.width, secretDoor.height);
+      ctx.restore();
+    }
+  } else {
+    if (assets.secretDoor.loaded) {
+      ctx.drawImage(assets.secretDoor.img, screenX, screenY, secretDoor.width, secretDoor.height);
+    } else {
+      ctx.fillStyle = "#8b5e3c";
+      ctx.fillRect(screenX, screenY, secretDoor.width, secretDoor.height);
+      ctx.fillStyle = "#6b4226";
+      ctx.fillRect(screenX + 4, screenY + 4, secretDoor.width - 8, secretDoor.height - 8);
+      ctx.fillStyle = "#d4a574";
+      ctx.fillRect(screenX + secretDoor.width - 14, screenY + secretDoor.height / 2 - 3, 6, 6);
+    }
+  }
+
+  if (secretDoor.hpBarTimer > 0 && !secretDoor.broken) {
+    const barWidth = secretDoor.width;
+    const barHeight = 4;
+    const barY = screenY - 8;
+    const alpha = secretDoor.hpBarTimer < 30 ? secretDoor.hpBarTimer / 30 : 1;
+
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = "#333";
+    ctx.fillRect(screenX, barY, barWidth, barHeight);
+    const fillWidth = (secretDoor.hp / secretDoor.maxHp) * barWidth;
+    ctx.fillStyle = "#ef4444";
+    ctx.fillRect(screenX, barY, fillWidth, barHeight);
+    ctx.restore();
+  }
+}
+
+// =============================================================================
+// SECRET LEVEL LOGIC
+// =============================================================================
+
+const SECRET_CHOICE_BUTTONS = [
+  { label: "Take Sword", x: 100, y: 360, width: 180, height: 40 },
+  { label: "Don't take sword", x: 310, y: 360, width: 180, height: 40 },
+  { label: "I am feeling special", x: 520, y: 360, width: 180, height: 40 },
+];
+
+function updateSecretLevel() {
+  if (!secretLevelState) return;
+  const st = secretLevelState;
+  const npc = st.npc;
+
+  if (assets.secretCave.frames.length > 1) {
+    secretCaveAnimTimer++;
+    if (secretCaveAnimTimer >= 16) {
+      secretCaveAnimTimer = 0;
+      secretCaveAnimFrame = (secretCaveAnimFrame + 1) % assets.secretCave.frames.length;
+    }
+  }
+
+  if (st.phase === "walk") {
+    npc.animTimer++;
+    if (npc.animTimer >= 12) {
+      npc.animTimer = 0;
+      npc.animFrame = (npc.animFrame + 1) % Math.max(1, assets.poodle.frames.length);
+    }
+
+    const dist = Math.abs(player.x + player.width / 2 - (npc.x + npc.width / 2));
+    if (dist < 120) {
+      st.phase = "talk";
+      st.dialogueTimer = 0;
+      st.dialogueChars = 0;
+      npc.animFrame = 0;
+      npc.animTimer = 0;
+      npc.facing = player.x < npc.x ? -1 : 1;
+    }
+  }
+
+  else if (st.phase === "talk") {
+    npc.animTimer++;
+    if (npc.animTimer >= 12) {
+      npc.animTimer = 0;
+      npc.animFrame = (npc.animFrame + 1) % Math.max(1, assets.poodleTalk.frames.length);
+    }
+
+    st.dialogueTimer++;
+    if (st.dialogueTimer % 3 === 0 && st.dialogueChars < st.fullDialogue.length) {
+      st.dialogueChars++;
+    }
+
+    if (st.dialogueChars >= st.fullDialogue.length && st.dialogueTimer > st.fullDialogue.length * 3 + 60) {
+      st.phase = "sword";
+    }
+  }
+
+  else if (st.phase === "sword") {
+    npc.animTimer++;
+    if (npc.animTimer >= 16) {
+      npc.animTimer = 0;
+      npc.animFrame = (npc.animFrame + 1) % Math.max(1, assets.poodleTalk.frames.length);
+    }
+
+    if (st.swordY < st.swordTargetY) {
+      st.swordY += 1.5;
+      if (st.swordY > st.swordTargetY) st.swordY = st.swordTargetY;
+    }
+
+    if (assets.sword.frames.length > 1) {
+      st.swordAnimTimer++;
+      if (st.swordAnimTimer >= 12) {
+        st.swordAnimTimer = 0;
+        st.swordAnimFrame = (st.swordAnimFrame + 1) % assets.sword.frames.length;
+      }
+    }
+
+    if (st.swordY >= st.swordTargetY) {
+      st.phase = "choice";
+    }
+  }
+
+  else if (st.phase === "choice") {
+    st.swordAnimTimer++;
+    if (assets.sword.frames.length > 1 && st.swordAnimTimer % 12 === 0) {
+      st.swordAnimFrame = (st.swordAnimFrame + 1) % assets.sword.frames.length;
+    }
+
+    npc.animTimer++;
+    if (npc.animTimer >= 16) {
+      npc.animTimer = 0;
+      npc.animFrame = (npc.animFrame + 1) % Math.max(1, assets.poodleTalk.frames.length);
+    }
+
+    if (st.choiceMade !== null) {
+      if (st.choiceMade === 0) {
+        hasSword = true;
+      } else if (st.choiceMade === 1) {
+        // Don't take sword
+      } else if (st.choiceMade === 2) {
+        hasSword = true;
+        isPoodle = true;
+        poodleMode = true;
+      }
+      st.phase = "exit";
+      st.exitTimer = 60;
+    }
+  }
+
+  else if (st.phase === "exit") {
+    st.exitTimer--;
+    if (st.exitTimer <= 0) {
+      startTransition(0);
+      st.phase = "done";
+    }
+  }
+}
+
+function drawSecretLevel() {
+  if (!secretLevelState) return;
+  const st = secretLevelState;
+  const npc = st.npc;
+
+  const npcScreenX = npc.x - camera.x;
+  const npcScreenY = npc.y - camera.y;
+
+  const useTalkAnim = (st.phase === "talk" || st.phase === "sword" || st.phase === "choice" || st.phase === "exit" || st.phase === "done");
+  const npcAsset = useTalkAnim ? assets.poodleTalk : assets.poodle;
+  const npcFrames = npcAsset.frames;
+  const npcFrame = npcFrames.length > 0 ? npcFrames[npc.animFrame % npcFrames.length] : null;
+
+  if (npcFrame) {
+    ctx.save();
+    if (npc.facing === -1) {
+      ctx.translate(npcScreenX + npc.width, npcScreenY);
+      ctx.scale(-1, 1);
+      ctx.drawImage(npcFrame, 0, 0, npc.width, npc.height);
+    } else {
+      ctx.drawImage(npcFrame, npcScreenX, npcScreenY, npc.width, npc.height);
+    }
+    ctx.restore();
+  } else if (npcAsset.loaded) {
+    ctx.save();
+    if (npc.facing === -1) {
+      ctx.translate(npcScreenX + npc.width, npcScreenY);
+      ctx.scale(-1, 1);
+      ctx.drawImage(npcAsset.img, 0, 0, npc.width, npc.height);
+    } else {
+      ctx.drawImage(npcAsset.img, npcScreenX, npcScreenY, npc.width, npc.height);
+    }
+    ctx.restore();
+  } else {
+    ctx.fillStyle = "#f9a8d4";
+    ctx.fillRect(npcScreenX, npcScreenY, npc.width, npc.height);
+    ctx.fillStyle = "#333";
+    ctx.font = "10px monospace";
+    ctx.textAlign = "center";
+    ctx.fillText("Poodle", npcScreenX + npc.width / 2, npcScreenY + npc.height / 2);
+    ctx.textAlign = "left";
+  }
+
+  if ((st.phase === "talk" || st.phase === "sword" || st.phase === "choice") && st.dialogueChars > 0) {
+    const text = st.fullDialogue.substring(0, st.dialogueChars);
+    const bubbleX = npcScreenX - 80;
+    const bubbleY = npcScreenY - 50;
+    const bubbleW = 220;
+    const bubbleH = 36;
+
+    ctx.fillStyle = "rgba(255,255,255,0.9)";
+    ctx.beginPath();
+    ctx.roundRect(bubbleX, bubbleY, bubbleW, bubbleH, 8);
+    ctx.fill();
+    ctx.strokeStyle = "#333";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.roundRect(bubbleX, bubbleY, bubbleW, bubbleH, 8);
+    ctx.stroke();
+
+    ctx.fillStyle = "#222";
+    ctx.font = "11px monospace";
+    ctx.textAlign = "left";
+    const maxW = bubbleW - 16;
+    let line = "";
+    let lineY = bubbleY + 14;
+    for (let i = 0; i < text.length; i++) {
+      const testLine = line + text[i];
+      if (ctx.measureText(testLine).width > maxW) {
+        ctx.fillText(line, bubbleX + 8, lineY);
+        line = text[i];
+        lineY += 13;
+      } else {
+        line = testLine;
+      }
+    }
+    ctx.fillText(line, bubbleX + 8, lineY);
+  }
+
+  if (st.phase === "sword" || st.phase === "choice" || st.phase === "exit") {
+    const swordW = 32;
+    const swordH = 48;
+    const swordX = canvas.width / 2 - swordW / 2;
+    const bob = Math.sin(Date.now() / 400) * 4;
+
+    const swordAsset = assets.sword;
+    const swordFrame = swordAsset.frames.length > 0 ? swordAsset.frames[st.swordAnimFrame % swordAsset.frames.length] : null;
+
+    ctx.save();
+    ctx.globalAlpha = 0.3 + Math.sin(Date.now() / 300) * 0.15;
+    ctx.fillStyle = "#fbbf24";
+    ctx.beginPath();
+    ctx.ellipse(swordX + swordW / 2, st.swordY + bob + swordH / 2, swordW / 2 + 10, swordH / 2 + 10, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+    ctx.restore();
+
+    if (swordFrame) {
+      ctx.drawImage(swordFrame, swordX, st.swordY + bob, swordW, swordH);
+    } else if (swordAsset.loaded) {
+      ctx.drawImage(swordAsset.img, swordX, st.swordY + bob, swordW, swordH);
+    } else {
+      ctx.fillStyle = "#fbbf24";
+      ctx.fillRect(swordX + swordW / 2 - 3, st.swordY + bob, 6, swordH - 10);
+      ctx.fillStyle = "#8b6914";
+      ctx.fillRect(swordX + swordW / 2 - 10, st.swordY + bob + swordH - 14, 20, 6);
+      ctx.fillRect(swordX + swordW / 2 - 4, st.swordY + bob + swordH - 10, 8, 10);
+    }
+  }
+
+  if (st.phase === "choice" && st.choiceMade === null) {
+    for (const btn of SECRET_CHOICE_BUTTONS) {
+      ctx.fillStyle = "rgba(30, 30, 60, 0.85)";
+      ctx.beginPath();
+      ctx.roundRect(btn.x, btn.y, btn.width, btn.height, 6);
+      ctx.fill();
+
+      ctx.strokeStyle = "#a78bfa";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.roundRect(btn.x, btn.y, btn.width, btn.height, 6);
+      ctx.stroke();
+
+      ctx.fillStyle = "#e2e8f0";
+      ctx.font = "bold 13px monospace";
+      ctx.textAlign = "center";
+      ctx.fillText(btn.label, btn.x + btn.width / 2, btn.y + btn.height / 2 + 5);
+      ctx.textAlign = "left";
+    }
+  }
+
+  if (st.phase === "exit" || st.phase === "done") {
+    ctx.fillStyle = "rgba(0,0,0,0.4)";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = "#fbbf24";
+    ctx.font = "bold 24px monospace";
+    ctx.textAlign = "center";
+    if (hasSword && isPoodle) {
+      ctx.fillText("You feel... special!", canvas.width / 2, canvas.height / 2);
+    } else if (hasSword) {
+      ctx.fillText("You got the sword!", canvas.width / 2, canvas.height / 2);
+    } else {
+      ctx.fillText("Maybe next time...", canvas.width / 2, canvas.height / 2);
+    }
+    ctx.textAlign = "left";
+  }
+}
+
+// =============================================================================
 // PORTAL LOGIC
 // =============================================================================
 
@@ -1825,6 +2344,27 @@ function updateProjectiles() {
     }
     if (hit) continue;
 
+    // Check collision with secret door
+    if (secretDoor && !secretDoor.broken) {
+      if (rectsOverlap(
+        { x: p.x, y: p.y, width: PROJECTILE_SIZE, height: PROJECTILE_SIZE },
+        secretDoor
+      )) {
+        secretDoor.hp--;
+        secretDoor.hpBarTimer = 90;
+        spawnDoorDebris(secretDoor);
+        if (secretDoor.hp <= 0) {
+          secretDoor.broken = true;
+          playSound("enemy_death");
+        } else {
+          playSound("enemy_hit");
+        }
+        projectiles.splice(i, 1);
+        hit = true;
+      }
+    }
+    if (hit) continue;
+
     if (activeBoss && activeBoss.alive && activeBoss.invincibleTimer === 0) {
       if (rectsOverlap(
         { x: p.x, y: p.y, width: PROJECTILE_SIZE, height: PROJECTILE_SIZE },
@@ -1916,6 +2456,119 @@ function drawProjectiles() {
 
     ctx.restore();
   }
+}
+
+// =============================================================================
+// BEAM WEAPON (sword equipped)
+// =============================================================================
+
+const BEAM_LENGTH = 300;
+const BEAM_WIDTH = 16;
+const BEAM_DAMAGE_INTERVAL = 10;
+
+function updateBeam() {
+  if (!player.beamActive) { beamDamageTimer = 0; return; }
+
+  beamDamageTimer++;
+  if (beamDamageTimer < BEAM_DAMAGE_INTERVAL) return;
+  beamDamageTimer = 0;
+
+  const cx = player.x + player.width / 2;
+  const cy = player.y + player.height / 2;
+  const cos = Math.cos(player.beamAngle);
+  const sin = Math.sin(player.beamAngle);
+
+  for (let e = activeEnemies.length - 1; e >= 0; e--) {
+    const enemy = activeEnemies[e];
+    if (enemy.invincibleTimer > 0) continue;
+    if (beamHitsRect(cx, cy, cos, sin, BEAM_LENGTH, BEAM_WIDTH, enemy)) {
+      enemy.hp--;
+      if (enemy.hp <= 0) {
+        spawnDeathExplosion(enemy, 2, 3, "enemy");
+        activeEnemies.splice(e, 1);
+        playSound("enemy_death");
+      } else {
+        const destroyed = pickRandomChunks(enemy, 2, 6);
+        spawnChunkDebris(enemy, destroyed, 2, 3, "enemy");
+        enemy.invincibleTimer = 15;
+        playSound("enemy_hit");
+      }
+    }
+  }
+
+  if (activeBoss && activeBoss.alive && activeBoss.invincibleTimer === 0) {
+    if (beamHitsRect(cx, cy, cos, sin, BEAM_LENGTH, BEAM_WIDTH, activeBoss)) {
+      activeBoss.hp--;
+      activeBoss.invincibleTimer = 60;
+      const bossDestroyed = pickRandomChunks(activeBoss, 1, 16);
+      spawnChunkDebris(activeBoss, bossDestroyed, 4, 4, "boss");
+
+      if (activeBoss.hp <= 0) {
+        spawnDeathExplosion(activeBoss, 4, 4, "boss");
+        activeBoss.alive = false;
+        victoryScreen = true;
+        playSound("boss_death");
+      } else {
+        playSound("boss_hit");
+      }
+    }
+  }
+
+  if (secretDoor && !secretDoor.broken) {
+    if (beamHitsRect(cx, cy, cos, sin, BEAM_LENGTH, BEAM_WIDTH, secretDoor)) {
+      secretDoor.hp--;
+      secretDoor.hpBarTimer = 90;
+      spawnDoorDebris(secretDoor);
+      if (secretDoor.hp <= 0) {
+        secretDoor.broken = true;
+        playSound("enemy_death");
+      } else {
+        playSound("enemy_hit");
+      }
+    }
+  }
+}
+
+function beamHitsRect(ox, oy, cos, sin, length, width, rect) {
+  const steps = 8;
+  const halfW = width / 2;
+  for (let i = 0; i <= steps; i++) {
+    const t = (i / steps) * length;
+    const px = ox + cos * t;
+    const py = oy + sin * t;
+    if (px + halfW > rect.x && px - halfW < rect.x + rect.width &&
+        py + halfW > rect.y && py - halfW < rect.y + rect.height) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function drawBeam() {
+  if (!player.beamActive) return;
+
+  const cx = player.x - camera.x + player.width / 2;
+  const cy = player.y - camera.y + player.height / 2;
+  const angle = player.beamAngle;
+  const pulse = 0.7 + Math.sin(Date.now() / 80) * 0.3;
+
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.rotate(angle);
+
+  ctx.globalAlpha = 0.25 * pulse;
+  ctx.fillStyle = "#fbbf24";
+  ctx.fillRect(0, -BEAM_WIDTH, BEAM_LENGTH, BEAM_WIDTH * 2);
+
+  ctx.globalAlpha = 0.7 * pulse;
+  ctx.fillStyle = "#f59e0b";
+  ctx.fillRect(0, -BEAM_WIDTH / 2, BEAM_LENGTH, BEAM_WIDTH);
+
+  ctx.globalAlpha = 0.9;
+  ctx.fillStyle = "#fef3c7";
+  ctx.fillRect(0, -BEAM_WIDTH / 4, BEAM_LENGTH, BEAM_WIDTH / 2);
+
+  ctx.restore();
 }
 
 // =============================================================================
@@ -2186,6 +2839,12 @@ function drawBackground() {
   const bgAsset = assets[bgKey];
 
   if (bgAsset && bgAsset.loaded) {
+    if (bgKey === "secretCave" && bgAsset.frames && bgAsset.frames.length > 1) {
+      const frame = bgAsset.frames[secretCaveAnimFrame % bgAsset.frames.length];
+      ctx.drawImage(frame, 0, 0, canvas.width, canvas.height);
+      return;
+    }
+
     const bgImg = bgAsset.img;
 
     const scale = canvas.height / bgImg.height;
@@ -2202,6 +2861,9 @@ function drawBackground() {
     if (currentLevel === 1) {
       gradient.addColorStop(0, "#1a1a2e");
       gradient.addColorStop(1, "#2d1b4e");
+    } else if (currentLevel === 2) {
+      gradient.addColorStop(0, "#1a0a2e");
+      gradient.addColorStop(1, "#3d1b6e");
     } else {
       gradient.addColorStop(0, "#87ceeb");
       gradient.addColorStop(1, SKY_COLOR);
@@ -2331,7 +2993,7 @@ function drawHUD() {
   ctx.fillStyle = "white";
   ctx.font = "bold 14px monospace";
   ctx.textAlign = "right";
-  ctx.fillText(`Level ${currentLevel + 1}`, canvas.width - 16, 27);
+  ctx.fillText(currentLevel === 2 ? "Secret!" : `Level ${currentLevel + 1}`, canvas.width - 16, 27);
   ctx.textAlign = "left";
 
   // Player health bar (only visible after being hit, fades out)
@@ -2374,8 +3036,11 @@ function gameLoop() {
     updateBoss();
     updateBossProjectiles();
     updateProjectiles();
+    updateBeam();
     updateDeathEffects();
     updatePortal();
+    if (currentLevel === 0) updateSecretDoor();
+    if (currentLevel === 2) updateSecretLevel();
   }
 
   camera.follow(player);
@@ -2384,12 +3049,15 @@ function gameLoop() {
   drawDecorations();
   drawPlatforms();
   drawPortal();
+  if (currentLevel === 0) drawSecretDoor();
   drawEnemies();
   drawBoss();
   drawBossProjectiles();
   drawProjectiles();
+  drawBeam();
   drawDeathEffects();
   player.draw();
+  if (currentLevel === 2) drawSecretLevel();
   drawHUD();
   drawTransition();
 
