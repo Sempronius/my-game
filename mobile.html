@@ -256,20 +256,20 @@ async function loadAllAssets() {
   ctx.textAlign = "left";
 
   await Promise.all([
-    loadImage(assets.player,      "player.png"),
-    loadImage(assets.enemy,       "enemy.png"),
-    loadImage(assets.background,  "background.png"),
-    loadImage(assets.portal,      "portal.png"),
-    loadImage(assets.background2, "background2.png"),
-    loadImage(assets.boss,        "boss.png"),
-    loadImage(assets.car,         "car.png"),
+    loadImage(assets.player,      "assets/design1/player.png"),
+    loadImage(assets.enemy,       "assets/design1/enemy.png"),
+    loadImage(assets.background,  "assets/design1/background.png"),
+    loadImage(assets.portal,      "assets/portal/portal.png"),
+    loadImage(assets.background2, "assets/design1/background2.png"),
+    loadImage(assets.boss,        "assets/design1/boss.png"),
+    loadImage(assets.car,         "assets/player/car.png"),
   ]);
 
-  // Load animation frames (numbered variants like player_j1.png, player_j2.png, ...)
+  // Load animation frames (numbered variants like player1.png, player2.png, ...)
   await Promise.all([
-    loadAnimFrames(assets.player, "player.png"),
-    loadAnimFrames(assets.enemy,  "enemy.png"),
-    loadAnimFrames(assets.boss,   "boss.png"),
+    loadAnimFrames(assets.player, "assets/design1/player.png"),
+    loadAnimFrames(assets.enemy,  "assets/design1/enemy.png"),
+    loadAnimFrames(assets.boss,   "assets/design1/boss.png"),
   ]);
 
   loadLevel(0);

@@ -1,0 +1,602 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Poodle Talking Animation Sprite Sheet</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            background: linear-gradient(135deg, #2d1b4e 0%, #1a0f2e 100%);
+            font-family: 'Courier New', monospace;
+            color: #ff69b4;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 2rem;
+        }
+
+        h1 {
+            font-size: 2.5rem;
+            margin-bottom: 1rem;
+            text-shadow: 0 0 20px rgba(255, 105, 180, 0.5);
+            letter-spacing: 3px;
+        }
+
+        .subtitle {
+            font-size: 1rem;
+            color: #db7093;
+            margin-bottom: 3rem;
+        }
+
+        .container {
+            background: #3a2a5e;
+            border-radius: 20px;
+            padding: 3rem;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+            border: 2px solid #5a4a8e;
+        }
+
+        .sprite-sheet-container {
+            background: #1a0f2e;
+            padding: 2rem;
+            border-radius: 10px;
+            margin-bottom: 2rem;
+            border: 2px solid #6a5a9e;
+        }
+
+        canvas {
+            display: block;
+            image-rendering: pixelated;
+            image-rendering: crisp-edges;
+            border: 3px solid #ff69b4;
+            background: #000;
+            margin: 0 auto;
+        }
+
+        .animation-preview {
+            margin-top: 3rem;
+            text-align: center;
+        }
+
+        .animation-preview h2 {
+            color: #ff69b4;
+            margin-bottom: 1.5rem;
+            font-size: 1.8rem;
+            text-shadow: 0 0 15px rgba(255, 105, 180, 0.4);
+        }
+
+        #animationCanvas {
+            border: 3px solid #9370db;
+            background: repeating-conic-gradient(#2a2a2a 0% 25%, #333 0% 50%) 50% / 20px 20px;
+        }
+
+        .controls {
+            margin-top: 2rem;
+            display: flex;
+            gap: 1rem;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+
+        button {
+            background: linear-gradient(135deg, #ff69b4 0%, #ff1493 100%);
+            color: #fff;
+            border: none;
+            padding: 0.8rem 1.5rem;
+            font-size: 1rem;
+            font-weight: bold;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            font-family: 'Courier New', monospace;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            box-shadow: 0 4px 15px rgba(255, 105, 180, 0.3);
+        }
+
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(255, 105, 180, 0.5);
+        }
+
+        button:active {
+            transform: translateY(0);
+        }
+
+        .info-box {
+            background: rgba(255, 105, 180, 0.1);
+            border: 2px solid #ff69b4;
+            border-radius: 10px;
+            padding: 1.5rem;
+            margin-top: 2rem;
+            color: #ff69b4;
+        }
+
+        .info-box h3 {
+            margin-bottom: 0.5rem;
+            color: #ffb6c1;
+        }
+
+        .info-box ul {
+            list-style-position: inside;
+            line-height: 1.8;
+        }
+
+        .speed-control {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            justify-content: center;
+            margin-top: 1rem;
+        }
+
+        .speed-control label {
+            color: #ff69b4;
+            font-size: 1rem;
+        }
+
+        input[type="range"] {
+            width: 200px;
+            height: 6px;
+            background: #5a4a8e;
+            border-radius: 5px;
+            outline: none;
+            -webkit-appearance: none;
+        }
+
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 20px;
+            height: 20px;
+            background: #ff69b4;
+            cursor: pointer;
+            border-radius: 50%;
+            box-shadow: 0 0 10px rgba(255, 105, 180, 0.5);
+        }
+
+        input[type="range"]::-moz-range-thumb {
+            width: 20px;
+            height: 20px;
+            background: #ff69b4;
+            cursor: pointer;
+            border-radius: 50%;
+            box-shadow: 0 0 10px rgba(255, 105, 180, 0.5);
+            border: none;
+        }
+
+        @keyframes glow {
+            0%, 100% { text-shadow: 0 0 20px rgba(255, 105, 180, 0.5); }
+            50% { text-shadow: 0 0 30px rgba(255, 105, 180, 0.8); }
+        }
+
+        h1 {
+            animation: glow 2s ease-in-out infinite;
+        }
+    </style>
+</head>
+<body>
+    <h1>🐩 PIXEL POODLE SPRITE SHEET 🐩</h1>
+    <p class="subtitle">Talking Animation • 6 Frames</p>
+
+    <div class="container">
+        <div class="sprite-sheet-container">
+            <canvas id="spriteSheet"></canvas>
+        </div>
+
+        <div class="animation-preview">
+            <h2>▶ Animation Preview</h2>
+            <canvas id="animationCanvas"></canvas>
+            
+            <div class="controls">
+                <button id="playPause">⏸ Pause</button>
+                <button id="download">💾 Download Sprite Sheet</button>
+            </div>
+
+            <div class="speed-control">
+                <label for="speed">Animation Speed:</label>
+                <input type="range" id="speed" min="50" max="500" value="120" step="50">
+                <span id="speedValue">120ms</span>
+            </div>
+        </div>
+
+        <div class="info-box">
+            <h3>📋 Sprite Sheet Information</h3>
+            <ul>
+                <li>Total Frames: 6</li>
+                <li>Frame Size: 48×48 pixels</li>
+                <li>Sheet Dimensions: 288×48 pixels</li>
+                <li>Animation Type: Talking cycle</li>
+                <li>Format: Horizontal sprite strip</li>
+            </ul>
+        </div>
+    </div>
+
+    <script>
+        // Sprite sheet canvas
+        const spriteCanvas = document.getElementById('spriteSheet');
+        const spriteCtx = spriteCanvas.getContext('2d');
+        
+        // Animation canvas
+        const animCanvas = document.getElementById('animationCanvas');
+        const animCtx = animCanvas.getContext('2d');
+
+        // Settings
+        const FRAME_WIDTH = 48;
+        const FRAME_HEIGHT = 48;
+        const TOTAL_FRAMES = 6;
+        
+        spriteCanvas.width = FRAME_WIDTH * TOTAL_FRAMES;
+        spriteCanvas.height = FRAME_HEIGHT;
+        
+        animCanvas.width = FRAME_WIDTH * 4;
+        animCanvas.height = FRAME_HEIGHT * 4;
+
+        // Poodle color palette
+        const colors = {
+            lightGold: '#f4d99f',
+            mediumGold: '#e8c170',
+            darkGold: '#d4a843',
+            brown: '#8b5a2b',
+            darkBrown: '#654321',
+            veryDarkBrown: '#4a3219',
+            cream: '#fff5cc',
+            yellow: '#ffd700',
+            pink: '#ffb6c1',
+            darkPink: '#ff69b4',
+            black: '#000000'
+        };
+
+        // Helper function to draw pixels
+        function drawPixel(ctx, x, y, ox, oy, w, h, color) {
+            ctx.fillStyle = color;
+            ctx.fillRect(x + ox, y + oy, w, h);
+        }
+
+        // Frame 0 - Mouth closed (original pose)
+        function drawFrame0(ctx, x, y) {
+            const p = (ox, oy, w, h, color) => drawPixel(ctx, x, y, ox, oy, w, h, color);
+            
+            ctx.clearRect(x, y, FRAME_WIDTH, FRAME_HEIGHT);
+            
+            // Head puff (top)
+            p(16, 4, 16, 4, colors.yellow);
+            p(14, 8, 20, 4, colors.lightGold);
+            p(12, 12, 24, 4, colors.mediumGold);
+            
+            // Ears
+            p(10, 12, 4, 8, colors.darkGold);
+            p(34, 12, 4, 8, colors.darkGold);
+            
+            // Face
+            p(14, 16, 20, 8, colors.cream);
+            p(18, 18, 3, 2, colors.darkBrown); // Left eye
+            p(27, 18, 3, 2, colors.darkBrown); // Right eye
+            p(22, 22, 4, 2, colors.brown); // Nose
+            // Mouth closed - small line
+            p(23, 24, 2, 1, colors.darkBrown);
+            
+            // Body
+            p(16, 24, 16, 12, colors.mediumGold);
+            p(14, 26, 20, 8, colors.lightGold);
+            
+            // Front legs
+            p(18, 36, 4, 8, colors.darkGold);
+            p(26, 36, 4, 8, colors.darkGold);
+            p(18, 44, 4, 2, colors.brown);
+            p(26, 44, 4, 2, colors.brown);
+            
+            // Back legs
+            p(14, 36, 4, 8, colors.darkGold);
+            p(30, 36, 4, 8, colors.darkGold);
+            p(14, 44, 4, 2, colors.brown);
+            p(30, 44, 4, 2, colors.brown);
+            
+            // Tail puff
+            p(6, 28, 6, 6, colors.yellow);
+            p(4, 30, 8, 4, colors.lightGold);
+        }
+
+        // Frame 1 - Mouth slightly open
+        function drawFrame1(ctx, x, y) {
+            const p = (ox, oy, w, h, color) => drawPixel(ctx, x, y, ox, oy, w, h, color);
+            
+            ctx.clearRect(x, y, FRAME_WIDTH, FRAME_HEIGHT);
+            
+            // Head puff
+            p(16, 4, 16, 4, colors.yellow);
+            p(14, 8, 20, 4, colors.lightGold);
+            p(12, 12, 24, 4, colors.mediumGold);
+            
+            // Ears
+            p(10, 12, 4, 8, colors.darkGold);
+            p(34, 12, 4, 8, colors.darkGold);
+            
+            // Face
+            p(14, 16, 20, 8, colors.cream);
+            p(18, 18, 3, 2, colors.darkBrown); // Eyes
+            p(27, 18, 3, 2, colors.darkBrown);
+            p(22, 22, 4, 2, colors.brown); // Nose
+            
+            // Mouth slightly open
+            p(22, 24, 4, 2, colors.darkBrown);
+            p(23, 25, 2, 1, colors.pink);
+            
+            // Body
+            p(16, 24, 16, 12, colors.mediumGold);
+            p(14, 26, 20, 8, colors.lightGold);
+            
+            // Legs
+            p(18, 36, 4, 8, colors.darkGold);
+            p(26, 36, 4, 8, colors.darkGold);
+            p(14, 36, 4, 8, colors.darkGold);
+            p(30, 36, 4, 8, colors.darkGold);
+            p(18, 44, 4, 2, colors.brown);
+            p(26, 44, 4, 2, colors.brown);
+            p(14, 44, 4, 2, colors.brown);
+            p(30, 44, 4, 2, colors.brown);
+            
+            // Tail
+            p(6, 28, 6, 6, colors.yellow);
+            p(4, 30, 8, 4, colors.lightGold);
+        }
+
+        // Frame 2 - Mouth more open
+        function drawFrame2(ctx, x, y) {
+            const p = (ox, oy, w, h, color) => drawPixel(ctx, x, y, ox, oy, w, h, color);
+            
+            ctx.clearRect(x, y, FRAME_WIDTH, FRAME_HEIGHT);
+            
+            // Head puff
+            p(16, 4, 16, 4, colors.yellow);
+            p(14, 8, 20, 4, colors.lightGold);
+            p(12, 12, 24, 4, colors.mediumGold);
+            
+            // Ears
+            p(10, 12, 4, 8, colors.darkGold);
+            p(34, 12, 4, 8, colors.darkGold);
+            
+            // Face
+            p(14, 16, 20, 8, colors.cream);
+            p(18, 18, 3, 2, colors.darkBrown); // Eyes
+            p(27, 18, 3, 2, colors.darkBrown);
+            p(22, 22, 4, 2, colors.brown); // Nose
+            
+            // Mouth more open
+            p(21, 24, 6, 3, colors.darkBrown);
+            p(22, 25, 4, 2, colors.pink);
+            
+            // Body
+            p(16, 24, 16, 12, colors.mediumGold);
+            p(14, 26, 20, 8, colors.lightGold);
+            
+            // Legs
+            p(18, 36, 4, 8, colors.darkGold);
+            p(26, 36, 4, 8, colors.darkGold);
+            p(14, 36, 4, 8, colors.darkGold);
+            p(30, 36, 4, 8, colors.darkGold);
+            p(18, 44, 4, 2, colors.brown);
+            p(26, 44, 4, 2, colors.brown);
+            p(14, 44, 4, 2, colors.brown);
+            p(30, 44, 4, 2, colors.brown);
+            
+            // Tail (slight wag)
+            p(5, 28, 6, 6, colors.yellow);
+            p(3, 30, 8, 4, colors.lightGold);
+        }
+
+        // Frame 3 - Mouth fully open
+        function drawFrame3(ctx, x, y) {
+            const p = (ox, oy, w, h, color) => drawPixel(ctx, x, y, ox, oy, w, h, color);
+            
+            ctx.clearRect(x, y, FRAME_WIDTH, FRAME_HEIGHT);
+            
+            // Head puff
+            p(16, 4, 16, 4, colors.yellow);
+            p(14, 8, 20, 4, colors.lightGold);
+            p(12, 12, 24, 4, colors.mediumGold);
+            
+            // Ears
+            p(10, 12, 4, 8, colors.darkGold);
+            p(34, 12, 4, 8, colors.darkGold);
+            
+            // Face
+            p(14, 16, 20, 8, colors.cream);
+            p(18, 18, 3, 2, colors.darkBrown); // Eyes wider
+            p(27, 18, 3, 2, colors.darkBrown);
+            p(22, 22, 4, 2, colors.brown); // Nose
+            
+            // Mouth fully open
+            p(20, 24, 8, 4, colors.darkBrown);
+            p(21, 25, 6, 3, colors.pink);
+            p(23, 26, 2, 1, colors.darkPink); // Tongue
+            
+            // Body
+            p(16, 24, 16, 12, colors.mediumGold);
+            p(14, 26, 20, 8, colors.lightGold);
+            
+            // Legs
+            p(18, 36, 4, 8, colors.darkGold);
+            p(26, 36, 4, 8, colors.darkGold);
+            p(14, 36, 4, 8, colors.darkGold);
+            p(30, 36, 4, 8, colors.darkGold);
+            p(18, 44, 4, 2, colors.brown);
+            p(26, 44, 4, 2, colors.brown);
+            p(14, 44, 4, 2, colors.brown);
+            p(30, 44, 4, 2, colors.brown);
+            
+            // Tail (wagging)
+            p(7, 28, 6, 6, colors.yellow);
+            p(5, 30, 8, 4, colors.lightGold);
+        }
+
+        // Frame 4 - Mouth closing (same as frame 2)
+        function drawFrame4(ctx, x, y) {
+            const p = (ox, oy, w, h, color) => drawPixel(ctx, x, y, ox, oy, w, h, color);
+            
+            ctx.clearRect(x, y, FRAME_WIDTH, FRAME_HEIGHT);
+            
+            // Head puff
+            p(16, 4, 16, 4, colors.yellow);
+            p(14, 8, 20, 4, colors.lightGold);
+            p(12, 12, 24, 4, colors.mediumGold);
+            
+            // Ears
+            p(10, 12, 4, 8, colors.darkGold);
+            p(34, 12, 4, 8, colors.darkGold);
+            
+            // Face
+            p(14, 16, 20, 8, colors.cream);
+            p(18, 18, 3, 2, colors.darkBrown);
+            p(27, 18, 3, 2, colors.darkBrown);
+            p(22, 22, 4, 2, colors.brown);
+            
+            // Mouth
+            p(21, 24, 6, 3, colors.darkBrown);
+            p(22, 25, 4, 2, colors.pink);
+            
+            // Body
+            p(16, 24, 16, 12, colors.mediumGold);
+            p(14, 26, 20, 8, colors.lightGold);
+            
+            // Legs
+            p(18, 36, 4, 8, colors.darkGold);
+            p(26, 36, 4, 8, colors.darkGold);
+            p(14, 36, 4, 8, colors.darkGold);
+            p(30, 36, 4, 8, colors.darkGold);
+            p(18, 44, 4, 2, colors.brown);
+            p(26, 44, 4, 2, colors.brown);
+            p(14, 44, 4, 2, colors.brown);
+            p(30, 44, 4, 2, colors.brown);
+            
+            // Tail
+            p(6, 28, 6, 6, colors.yellow);
+            p(4, 30, 8, 4, colors.lightGold);
+        }
+
+        // Frame 5 - Mouth almost closed (same as frame 1)
+        function drawFrame5(ctx, x, y) {
+            const p = (ox, oy, w, h, color) => drawPixel(ctx, x, y, ox, oy, w, h, color);
+            
+            ctx.clearRect(x, y, FRAME_WIDTH, FRAME_HEIGHT);
+            
+            // Head puff
+            p(16, 4, 16, 4, colors.yellow);
+            p(14, 8, 20, 4, colors.lightGold);
+            p(12, 12, 24, 4, colors.mediumGold);
+            
+            // Ears
+            p(10, 12, 4, 8, colors.darkGold);
+            p(34, 12, 4, 8, colors.darkGold);
+            
+            // Face
+            p(14, 16, 20, 8, colors.cream);
+            p(18, 18, 3, 2, colors.darkBrown);
+            p(27, 18, 3, 2, colors.darkBrown);
+            p(22, 22, 4, 2, colors.brown);
+            
+            // Mouth
+            p(22, 24, 4, 2, colors.darkBrown);
+            p(23, 25, 2, 1, colors.pink);
+            
+            // Body
+            p(16, 24, 16, 12, colors.mediumGold);
+            p(14, 26, 20, 8, colors.lightGold);
+            
+            // Legs
+            p(18, 36, 4, 8, colors.darkGold);
+            p(26, 36, 4, 8, colors.darkGold);
+            p(14, 36, 4, 8, colors.darkGold);
+            p(30, 36, 4, 8, colors.darkGold);
+            p(18, 44, 4, 2, colors.brown);
+            p(26, 44, 4, 2, colors.brown);
+            p(14, 44, 4, 2, colors.brown);
+            p(30, 44, 4, 2, colors.brown);
+            
+            // Tail
+            p(5, 28, 6, 6, colors.yellow);
+            p(3, 30, 8, 4, colors.lightGold);
+        }
+
+        // Draw all frames on sprite sheet
+        const frames = [
+            drawFrame0,
+            drawFrame1,
+            drawFrame2,
+            drawFrame3,
+            drawFrame4,
+            drawFrame5
+        ];
+
+        frames.forEach((drawFunc, i) => {
+            drawFunc(spriteCtx, i * FRAME_WIDTH, 0);
+        });
+
+        // Animation
+        let currentFrame = 0;
+        let isPlaying = true;
+        let animationSpeed = 120;
+        let animationInterval;
+
+        function animate() {
+            animCtx.clearRect(0, 0, animCanvas.width, animCanvas.height);
+            
+            // Draw scaled up version
+            animCtx.imageSmoothingEnabled = false;
+            animCtx.drawImage(
+                spriteCanvas,
+                currentFrame * FRAME_WIDTH, 0,
+                FRAME_WIDTH, FRAME_HEIGHT,
+                0, 0,
+                FRAME_WIDTH * 4, FRAME_HEIGHT * 4
+            );
+            
+            currentFrame = (currentFrame + 1) % TOTAL_FRAMES;
+        }
+
+        function startAnimation() {
+            if (animationInterval) clearInterval(animationInterval);
+            animationInterval = setInterval(animate, animationSpeed);
+        }
+
+        startAnimation();
+
+        // Controls
+        document.getElementById('playPause').addEventListener('click', function() {
+            isPlaying = !isPlaying;
+            if (isPlaying) {
+                startAnimation();
+                this.textContent = '⏸ Pause';
+            } else {
+                clearInterval(animationInterval);
+                this.textContent = '▶ Play';
+            }
+        });
+
+        document.getElementById('download').addEventListener('click', function() {
+            const link = document.createElement('a');
+            link.download = 'poodle-talking-spritesheet.png';
+            link.href = spriteCanvas.toDataURL();
+            link.click();
+        });
+
+        const speedSlider = document.getElementById('speed');
+        const speedValue = document.getElementById('speedValue');
+
+        speedSlider.addEventListener('input', function() {
+            animationSpeed = parseInt(this.value);
+            speedValue.textContent = animationSpeed + 'ms';
+            if (isPlaying) {
+                startAnimation();
+            }
+        });
+    </script>
+</body>
+</html>

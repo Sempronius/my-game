@@ -115,16 +115,165 @@ async function loadAnimFrames(asset, baseSrc) {
   if (!asset.loaded) return;
   const prefix = baseSrc.replace(".png", "");
   const bust = "?t=" + Date.now();
-  for (let n = 1; n <= 20; n++) {
+  // Load all numbered frames 1-200, skipping gaps (files may be non-sequential)
+  const probes = [];
+  for (let n = 1; n <= 200; n++) {
     const img = new Image();
-    const ok = await new Promise((resolve) => {
-      img.onload = () => resolve(true);
-      img.onerror = () => resolve(false);
+    probes.push(new Promise((resolve) => {
+      img.onload = () => resolve(img);
+      img.onerror = () => resolve(null);
       img.src = prefix + n + ".png" + bust;
-    });
-    if (!ok) break;
-    asset.frames.push(img);
+    }));
   }
+  const results = await Promise.all(probes);
+  for (const img of results) {
+    if (img) asset.frames.push(img);
+  }
+}
+
+// =============================================================================
+// PROCEDURAL POODLE SPRITES (generated from code — no image files needed)
+// =============================================================================
+
+/** Convert an offscreen canvas to an Image (so naturalWidth/naturalHeight work) */
+function canvasToImg(cv) {
+  return new Promise(r => { const i = new Image(); i.onload = () => r(i); i.src = cv.toDataURL(); });
+}
+
+/** Draw a single 48x48 poodle frame on a fresh canvas, return the canvas */
+function poodleFrame(drawFn) {
+  const cv = document.createElement("canvas");
+  cv.width = 48; cv.height = 48;
+  const cx = cv.getContext("2d");
+  const p = (ox, oy, w, h, col) => { cx.fillStyle = col; cx.fillRect(ox, oy, w, h); };
+  drawFn(p);
+  return cv;
+}
+
+// Shared color palette
+const PC = {
+  lg: "#f4d99f", mg: "#e8c170", dg: "#d4a843",
+  br: "#8b5a2b", db: "#654321", cr: "#fff5cc", yl: "#ffd700",
+  pk: "#ffb6c1", dp: "#ff69b4"
+};
+
+/** Common poodle head + body drawing (used by most frames) */
+function poodleBase(p, yOff) {
+  const y = yOff || 0;
+  p(16, 4+y, 16, 4, PC.yl);
+  p(14, 8+y, 20, 4, PC.lg);
+  p(12, 12+y, 24, 4, PC.mg);
+  p(10, 12+y, 4, 8, PC.dg); // ears
+  p(34, 12+y, 4, 8, PC.dg);
+  p(14, 16+y, 20, 8, PC.cr); // face
+  p(18, 18+y, 3, 2, PC.db); // eyes
+  p(27, 18+y, 3, 2, PC.db);
+  p(22, 22+y, 4, 2, PC.br); // nose
+  p(16, 24+y, 16, 12, PC.mg); // body
+  p(14, 26+y, 20, 8, PC.lg);
+}
+
+/** Generate poodle WALKING frames (6 frames, 48x48 each) */
+async function generatePoodleWalkFrames() {
+  const canvases = [
+    // Frame 0: Standing
+    poodleFrame(p => {
+      poodleBase(p, 0);
+      p(18,36,4,8,PC.dg); p(26,36,4,8,PC.dg); p(14,36,4,8,PC.dg); p(30,36,4,8,PC.dg);
+      p(18,44,4,2,PC.br); p(26,44,4,2,PC.br); p(14,44,4,2,PC.br); p(30,44,4,2,PC.br);
+      p(6,28,6,6,PC.yl); p(4,30,8,4,PC.lg);
+    }),
+    // Frame 1: Bob +1, legs phase A
+    poodleFrame(p => {
+      poodleBase(p, 1);
+      p(18,37,4,7,PC.dg); p(18,44,4,2,PC.br);
+      p(26,36,4,8,PC.dg); p(26,44,4,2,PC.br);
+      p(14,37,4,7,PC.dg); p(14,44,4,2,PC.br);
+      p(30,36,4,8,PC.dg); p(30,44,4,2,PC.br);
+      p(6,27,6,6,PC.yl); p(4,29,8,4,PC.lg);
+    }),
+    // Frame 2: Legs spread more
+    poodleFrame(p => {
+      poodleBase(p, 0);
+      p(20,38,4,6,PC.dg); p(20,44,4,2,PC.br);
+      p(24,36,4,8,PC.dg); p(24,44,4,2,PC.br);
+      p(13,38,4,6,PC.dg); p(13,44,4,2,PC.br);
+      p(31,36,4,8,PC.dg); p(31,44,4,2,PC.br);
+      p(6,28,6,6,PC.yl); p(4,30,8,4,PC.lg);
+    }),
+    // Frame 3: Bob +1, opposite legs
+    poodleFrame(p => {
+      poodleBase(p, 1);
+      p(18,36,4,8,PC.dg); p(18,44,4,2,PC.br);
+      p(26,37,4,7,PC.dg); p(26,44,4,2,PC.br);
+      p(14,36,4,8,PC.dg); p(14,44,4,2,PC.br);
+      p(30,37,4,7,PC.dg); p(30,44,4,2,PC.br);
+      p(6,29,6,6,PC.yl); p(4,31,8,4,PC.lg);
+    }),
+    // Frame 4: Spread opposite
+    poodleFrame(p => {
+      poodleBase(p, 0);
+      p(16,36,4,8,PC.dg); p(16,44,4,2,PC.br);
+      p(28,38,4,6,PC.dg); p(28,44,4,2,PC.br);
+      p(15,36,4,8,PC.dg); p(15,44,4,2,PC.br);
+      p(29,38,4,6,PC.dg); p(29,44,4,2,PC.br);
+      p(5,27,6,6,PC.yl); p(3,29,8,4,PC.lg);
+    }),
+    // Frame 5: Bob +1, return phase
+    poodleFrame(p => {
+      poodleBase(p, 1);
+      p(18,36,4,8,PC.dg); p(18,44,4,2,PC.br);
+      p(26,37,4,7,PC.dg); p(26,44,4,2,PC.br);
+      p(14,37,4,7,PC.dg); p(14,44,4,2,PC.br);
+      p(30,36,4,8,PC.dg); p(30,44,4,2,PC.br);
+      p(7,28,6,6,PC.yl); p(5,30,8,4,PC.lg);
+    }),
+  ];
+  return Promise.all(canvases.map(canvasToImg));
+}
+
+/** Generate poodle TALKING frames (6 frames, 48x48 each) */
+async function generatePoodleTalkFrames() {
+  function talkBase(p, mouth) {
+    poodleBase(p, 0);
+    mouth(p);
+    // Standing legs (no walk)
+    p(18,36,4,8,PC.dg); p(26,36,4,8,PC.dg); p(14,36,4,8,PC.dg); p(30,36,4,8,PC.dg);
+    p(18,44,4,2,PC.br); p(26,44,4,2,PC.br); p(14,44,4,2,PC.br); p(30,44,4,2,PC.br);
+  }
+  const canvases = [
+    // Frame 0: Mouth closed
+    poodleFrame(p => {
+      talkBase(p, p2 => { p2(23,24,2,1,PC.db); });
+      p(6,28,6,6,PC.yl); p(4,30,8,4,PC.lg);
+    }),
+    // Frame 1: Mouth slightly open
+    poodleFrame(p => {
+      talkBase(p, p2 => { p2(22,24,4,2,PC.db); p2(23,25,2,1,PC.pk); });
+      p(6,28,6,6,PC.yl); p(4,30,8,4,PC.lg);
+    }),
+    // Frame 2: Mouth more open
+    poodleFrame(p => {
+      talkBase(p, p2 => { p2(21,24,6,3,PC.db); p2(22,25,4,2,PC.pk); });
+      p(5,28,6,6,PC.yl); p(3,30,8,4,PC.lg);
+    }),
+    // Frame 3: Mouth fully open (tongue)
+    poodleFrame(p => {
+      talkBase(p, p2 => { p2(20,24,8,4,PC.db); p2(21,25,6,3,PC.pk); p2(23,26,2,1,PC.dp); });
+      p(7,28,6,6,PC.yl); p(5,30,8,4,PC.lg);
+    }),
+    // Frame 4: Mouth closing (= frame 2)
+    poodleFrame(p => {
+      talkBase(p, p2 => { p2(21,24,6,3,PC.db); p2(22,25,4,2,PC.pk); });
+      p(6,28,6,6,PC.yl); p(4,30,8,4,PC.lg);
+    }),
+    // Frame 5: Mouth almost closed (= frame 1)
+    poodleFrame(p => {
+      talkBase(p, p2 => { p2(22,24,4,2,PC.db); p2(23,25,2,1,PC.pk); });
+      p(5,28,6,6,PC.yl); p(3,30,8,4,PC.lg);
+    }),
+  ];
+  return Promise.all(canvases.map(canvasToImg));
 }
 
 /**
@@ -141,34 +290,40 @@ async function loadAllAssets() {
   ctx.fillText("Loading assets...", canvas.width / 2, canvas.height / 2);
   ctx.textAlign = "left";
 
-  // --- Design 2 (_j suffix) --- Switch to Design 1 by removing the _j suffix
+  // --- Design 2 (_j suffix) --- Assets organized in subdirectories
   await Promise.all([
-    loadImage(assets.player,          "player_j.png"),
-    loadImage(assets.enemy,           "enemy_j.png"),
-    loadImage(assets.background,      "background_j.png"),
-    loadImage(assets.portal,          "portal_j.png"),
-    loadImage(assets.background2,     "background2_j.png"),
-    loadImage(assets.boss,            "boss_j.png"),
-    loadImage(assets.car,             "car.png"),
-    loadImage(assets.secretDoor,      "secret_door_j.png"),
-    loadImage(assets.secretDoorBroken,"secret_door_broken_j.png"),
-    loadImage(assets.secretCave,      "secret_cave_j.png"),
-    loadImage(assets.poodle,          "poodle_j.png"),
-    loadImage(assets.poodleTalk,      "poodle_talk_j.png"),
-    loadImage(assets.sword,           "sword_j.png"),
-    loadImage(assets.poodleCar,       "poodle_car_j.png"),
+    loadImage(assets.player,          "assets/player/player_j.png"),
+    loadImage(assets.enemy,           "assets/enemy/enemy_j.png"),
+    loadImage(assets.background,      "assets/backgrounds/background_j.png"),
+    loadImage(assets.portal,          "assets/portal/portal_j.png"),
+    loadImage(assets.background2,     "assets/backgrounds/background2_j.png"),
+    loadImage(assets.boss,            "assets/boss/boss_j.png"),
+    loadImage(assets.car,             "assets/player/car.png"),
+    loadImage(assets.secretDoor,      "assets/secret_door/secret_door_j.png"),
+    loadImage(assets.secretDoorBroken,"assets/secret_door/secret_door_broken_j.png"),
+    loadImage(assets.secretCave,      "assets/backgrounds/secret_cave_j.png"),
+    // poodle + poodleTalk generated from code below (no PNG needed)
+    loadImage(assets.sword,           "assets/sword/sword_j.png"),
+    loadImage(assets.poodleCar,       "assets/poodle/poodle_car_j.png"),
   ]);
 
   // Load animation frames (numbered variants like player_j1.png, player_j2.png, ...)
   await Promise.all([
-    loadAnimFrames(assets.player,     "player_j.png"),
-    loadAnimFrames(assets.enemy,      "enemy_j.png"),
-    loadAnimFrames(assets.boss,       "boss_j.png"),
-    loadAnimFrames(assets.secretCave, "secret_cave_j.png"),
-    loadAnimFrames(assets.poodle,     "poodle_j.png"),
-    loadAnimFrames(assets.poodleTalk, "poodle_talk_j.png"),
-    loadAnimFrames(assets.sword,      "sword_j.png"),
+    loadAnimFrames(assets.player,     "assets/player/player_j.png"),
+    loadAnimFrames(assets.enemy,      "assets/enemy/enemy_j.png"),
+    loadAnimFrames(assets.boss,       "assets/boss/boss_j.png"),
+    loadAnimFrames(assets.secretCave, "assets/backgrounds/secret_cave_j.png"),
+    // poodle + poodleTalk use procedural frames (no PNG loading)
+    loadAnimFrames(assets.sword,      "assets/sword/sword_j.png"),
   ]);
+
+  // Generate poodle sprites from code (no PNG files needed)
+  assets.poodle.frames = await generatePoodleWalkFrames();
+  assets.poodle.loaded = true;
+  assets.poodle.img = assets.poodle.frames[0];
+  assets.poodleTalk.frames = await generatePoodleTalkFrames();
+  assets.poodleTalk.loaded = true;
+  assets.poodleTalk.img = assets.poodleTalk.frames[0];
 
   // Load Level 1 and start the game loop
   loadLevel(0);
@@ -217,11 +372,14 @@ const camera = {
 // PLAYER
 // =============================================================================
 
+const PLAYER_BASE_W = 60;
+const PLAYER_BASE_H = 80;
+
 const player = {
   x: 100,               // World position
   y: 300,
-  width: 60,
-  height: 80,
+  width: PLAYER_BASE_W,
+  height: PLAYER_BASE_H,
   velX: 0,              // Horizontal velocity
   velY: 0,              // Vertical velocity
   onGround: false,      // Whether we're standing on something
@@ -259,6 +417,20 @@ const player = {
     // Don't allow input during transitions or victory
     if (transitionTimer > 0 || victoryScreen) return;
 
+    // ---- Auto-size hitbox to match sprite aspect ratio ----
+    if (isPoodle) {
+      const pa = assets.poodle;
+      const src = pa.frames.length > 0 ? pa.frames[0] : (pa.loaded ? pa.img : null);
+      if (src && src.naturalWidth && src.naturalHeight) {
+        const ratio = src.naturalWidth / src.naturalHeight;
+        this.height = PLAYER_BASE_H;
+        this.width = Math.round(PLAYER_BASE_H * ratio);
+      }
+    } else {
+      this.width = PLAYER_BASE_W;
+      this.height = PLAYER_BASE_H;
+    }
+
     // ---- Invincibility & HP bar timers ----
     if (this.invincibleTimer > 0) this.invincibleTimer--;
     if (this.hpBarTimer > 0) this.hpBarTimer--;
@@ -287,7 +459,7 @@ const player = {
     // ---- Walk animation ----
     const animAsset = isPoodle ? assets.poodle : assets.player;
     if (animAsset.frames.length > 1) {
-      const animSpeed = moving ? 12 : 24;
+      const animSpeed = moving ? (isPoodle ? 9 : 12) : 24; // poodle: 150ms, player: 200ms
       this.animTimer++;
       if (this.animTimer >= animSpeed) {
         this.animTimer = 0;
@@ -478,20 +650,26 @@ const player = {
       }
     }
 
-    // ---- Sword on player's far side (right when facing right, left when facing left) ----
+    // ---- Sword in player's raised right hand ----
     if (hasSword && !corvetteMode) {
-      const swordW = 16;
-      const swordH = 32;
-      const swordOffsetX = this.facing === 1 ? this.width - 4 : -swordW + 4;
-      const swordOffsetY = this.height / 2 - swordH / 2;
+      const swordW = 32;
+      const swordH = 64;
+      // Hand position: upper-right of sprite (right arm raised)
+      const handX = this.facing === 1 ? this.width - 12 : 12 - swordW;
+      const handY = -swordH + 24; // sword extends above head, handle near hand
+      // Animate sword frames
+      const swordAsset = assets.sword;
+      const swordImg = swordAsset.frames.length > 1
+        ? swordAsset.frames[this.animFrame % swordAsset.frames.length]
+        : swordAsset.img;
 
-      if (assets.sword.loaded) {
-        ctx.drawImage(assets.sword.img, screenX + swordOffsetX, screenY + swordOffsetY, swordW, swordH);
+      if (swordAsset.loaded || swordAsset.frames.length > 0) {
+        ctx.drawImage(swordImg, screenX + handX, screenY + handY, swordW, swordH);
       } else {
         ctx.fillStyle = "#fbbf24";
-        ctx.fillRect(screenX + swordOffsetX + swordW / 2 - 2, screenY + swordOffsetY, 4, swordH - 8);
+        ctx.fillRect(screenX + handX + swordW / 2 - 3, screenY + handY, 6, swordH - 12);
         ctx.fillStyle = "#8b6914";
-        ctx.fillRect(screenX + swordOffsetX, screenY + swordOffsetY + swordH - 10, swordW, 4);
+        ctx.fillRect(screenX + handX, screenY + handY + swordH - 14, swordW, 6);
       }
     }
 
@@ -2151,7 +2329,7 @@ function updateSecretLevel() {
   if (st.phase === "walk") {
     // NPC paces on right side
     npc.animTimer++;
-    if (npc.animTimer >= 12) {
+    if (npc.animTimer >= 9) { // 150ms at 60fps
       npc.animTimer = 0;
       npc.animFrame = (npc.animFrame + 1) % Math.max(1, assets.poodle.frames.length);
     }
@@ -2171,7 +2349,7 @@ function updateSecretLevel() {
   else if (st.phase === "talk") {
     // NPC talk animation
     npc.animTimer++;
-    if (npc.animTimer >= 12) {
+    if (npc.animTimer >= 7) { // 120ms at 60fps
       npc.animTimer = 0;
       npc.animFrame = (npc.animFrame + 1) % Math.max(1, assets.poodleTalk.frames.length);
     }
@@ -2682,9 +2860,11 @@ function updateBeam() {
   if (beamDamageTimer < BEAM_DAMAGE_INTERVAL) return;
   beamDamageTimer = 0;
 
-  // Beam hitbox: a rectangle from player center along beamAngle
-  const cx = player.x + player.width / 2;
-  const cy = player.y + player.height / 2;
+  // Beam origin: sword tip (top-center of sword) when equipped
+  const swordW = 32, swordH = 64;
+  const handX = player.facing === 1 ? player.width - 12 : 12 - swordW;
+  const cx = player.x + handX + swordW / 2;
+  const cy = player.y + (-swordH + 24); // sword tip (top of sword)
   const cos = Math.cos(player.beamAngle);
   const sin = Math.sin(player.beamAngle);
 
@@ -2762,8 +2942,11 @@ function beamHitsRect(ox, oy, cos, sin, length, width, rect) {
 function drawBeam() {
   if (!player.beamActive) return;
 
-  const cx = player.x - camera.x + player.width / 2;
-  const cy = player.y - camera.y + player.height / 2;
+  // Beam draws from sword tip
+  const swordW = 32, swordH = 64;
+  const handX = player.facing === 1 ? player.width - 12 : 12 - swordW;
+  const cx = player.x - camera.x + handX + swordW / 2;
+  const cy = player.y - camera.y + (-swordH + 24);
   const angle = player.beamAngle;
   const pulse = 0.7 + Math.sin(Date.now() / 80) * 0.3;
 
