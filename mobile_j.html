@@ -1082,6 +1082,113 @@ function startBeamSound() {
   if (audioCtx.state === "suspended") audioCtx.resume();
   const t = audioCtx.currentTime;
 
+  if (isPoodle) {
+    // === POODLE FART BEAM SOUND ===
+
+    // Initial blast — short low burst
+    const blast = audioCtx.createOscillator();
+    const blastG = audioCtx.createGain();
+    const blastLp = audioCtx.createBiquadFilter();
+    blast.type = "sawtooth";
+    blast.frequency.setValueAtTime(90, t);
+    blast.frequency.exponentialRampToValueAtTime(55, t + 0.15);
+    blastLp.type = "lowpass"; blastLp.frequency.value = 250; blastLp.Q.value = 3;
+    blastG.gain.setValueAtTime(0.25, t);
+    blastG.gain.exponentialRampToValueAtTime(0.001, t + 0.2);
+    blast.connect(blastLp).connect(blastG).connect(audioCtx.destination);
+    blast.start(t); blast.stop(t + 0.25);
+
+    // Initial splutter noise
+    const splut = audioCtx.createBufferSource();
+    splut.buffer = createNoise(0.2);
+    const splutLp = audioCtx.createBiquadFilter();
+    splutLp.type = "lowpass"; splutLp.frequency.value = 400; splutLp.Q.value = 2;
+    const splutG = audioCtx.createGain();
+    splutG.gain.setValueAtTime(0.15, t);
+    splutG.gain.exponentialRampToValueAtTime(0.001, t + 0.18);
+    splut.connect(splutLp).connect(splutG).connect(audioCtx.destination);
+    splut.start(t);
+
+    // === Persistent rumble layers ===
+
+    // Layer 1: Deep rumble — triangle at ~65Hz with wobble
+    const hum1 = audioCtx.createOscillator();
+    const hum1G = audioCtx.createGain();
+    const hum1Lp = audioCtx.createBiquadFilter();
+    hum1.type = "triangle";
+    hum1.frequency.value = 65;
+    hum1Lp.type = "lowpass"; hum1Lp.frequency.value = 200; hum1Lp.Q.value = 5;
+    hum1G.gain.value = 0.1;
+    hum1.connect(hum1Lp).connect(hum1G);
+
+    // Layer 2: Sub bass flutter — square at ~45Hz for that flappy vibration
+    const hum2 = audioCtx.createOscillator();
+    const hum2G = audioCtx.createGain();
+    hum2.type = "square";
+    hum2.frequency.value = 45;
+    hum2G.gain.value = 0.06;
+    const hum2Lp = audioCtx.createBiquadFilter();
+    hum2Lp.type = "lowpass"; hum2Lp.frequency.value = 150; hum2Lp.Q.value = 3;
+    hum2.connect(hum2Lp).connect(hum2G);
+
+    // Layer 3: Mid-range buzz for the "brrrap" texture
+    const buzz = audioCtx.createOscillator();
+    const buzzG = audioCtx.createGain();
+    const buzzLp = audioCtx.createBiquadFilter();
+    buzz.type = "sawtooth";
+    buzz.frequency.value = 110;
+    buzzLp.type = "lowpass"; buzzLp.frequency.value = 350; buzzLp.Q.value = 4;
+    buzzG.gain.value = 0.04;
+    buzz.connect(buzzLp).connect(buzzG);
+
+    // Layer 4: Irregular flutter LFO — makes it sound organic and sputtery
+    const lfo = audioCtx.createOscillator();
+    const lfoG = audioCtx.createGain();
+    lfo.type = "sawtooth";
+    lfo.frequency.value = 8; // fast flutter
+    lfoG.gain.value = 15;    // wide pitch modulation for flappy effect
+    lfo.connect(lfoG);
+    lfoG.connect(hum1.frequency);
+    lfoG.connect(hum2.frequency);
+    lfoG.connect(buzz.frequency);
+
+    // Layer 5: Filtered brown noise for airy hiss
+    const nBuf = createNoise(2);
+    const noise = audioCtx.createBufferSource();
+    noise.buffer = nBuf;
+    noise.loop = true;
+    const nLp = audioCtx.createBiquadFilter();
+    nLp.type = "lowpass"; nLp.frequency.value = 500; nLp.Q.value = 1;
+    const nG = audioCtx.createGain();
+    nG.gain.value = 0.04;
+    noise.connect(nLp).connect(nG);
+
+    // Waveshaper for wet, squelchy distortion
+    const ws = audioCtx.createWaveShaper();
+    const curve = new Float32Array(256);
+    for (let i = 0; i < 256; i++) { const x = (i / 128) - 1; curve[i] = Math.tanh(x * 5); }
+    ws.curve = curve;
+
+    // Master gain with fade-in
+    const gainMaster = audioCtx.createGain();
+    gainMaster.gain.setValueAtTime(0, t);
+    gainMaster.gain.linearRampToValueAtTime(1, t + 0.05);
+
+    hum1G.connect(ws);
+    hum2G.connect(ws);
+    buzzG.connect(ws);
+    ws.connect(gainMaster);
+    nG.connect(gainMaster);
+    gainMaster.connect(audioCtx.destination);
+
+    hum1.start(); hum2.start(); buzz.start(); lfo.start(); noise.start();
+
+    beamSoundNodes = { hum1, hum2, buzz, lfo, noise, gainMaster };
+    return;
+  }
+
+  // === NORMAL LIGHTSABER BEAM SOUND ===
+
   // === Ignition zap — one-shot on activation ===
   const ign = audioCtx.createOscillator();
   const ignG = audioCtx.createGain();
