@@ -91,7 +91,7 @@ const assets = {
   secretDoor:      { img: new Image(), loaded: false },
   secretDoorBroken:{ img: new Image(), loaded: false },
   secretCave:      { img: new Image(), loaded: false, frames: [] },
-  poodle:          { img: new Image(), loaded: false, frames: [] },
+  poodle:          { img: new Image(), loaded: false, frames: [], video: null, videoReady: false },
   poodleTalk:      { img: new Image(), loaded: false, frames: [] },
   sword:           { img: new Image(), loaded: false, frames: [] },
   poodleCar:       { img: new Image(), loaded: false },
@@ -169,6 +169,41 @@ async function loadAllAssets() {
     loadAnimFrames(assets.poodleTalk, "poodle_talk_j.png"),
     loadAnimFrames(assets.sword,      "sword_j.png"),
   ]);
+
+  // Load poodle video sprite (WebM) — falls back to PNG if unavailable
+  {
+    const vid = document.createElement("video");
+    vid.loop = true;
+    vid.muted = true;
+    vid.playsInline = true;
+    vid.preload = "auto";
+    vid.crossOrigin = "anonymous";
+
+    function onVideoReady() {
+      if (assets.poodle.videoReady) return; // already set
+      assets.poodle.video = vid;
+      assets.poodle.videoReady = true;
+      console.log("poodle_j.webm loaded OK — videoWidth:", vid.videoWidth, "videoHeight:", vid.videoHeight);
+    }
+
+    vid.addEventListener("canplay", onVideoReady);
+    vid.addEventListener("canplaythrough", onVideoReady);
+    vid.addEventListener("loadeddata", onVideoReady);
+    vid.addEventListener("error", (e) => {
+      console.warn("Could not load poodle_j.webm —", e.message || vid.error?.message || "unknown error", "— using PNG fallback.");
+    });
+
+    vid.src = "poodle_j.webm";
+    vid.load();
+
+    // Polling fallback: check readyState every 500ms for 5 seconds
+    let checks = 0;
+    const poll = setInterval(() => {
+      checks++;
+      if (assets.poodle.videoReady || checks > 10) { clearInterval(poll); return; }
+      if (vid.readyState >= 2) { onVideoReady(); clearInterval(poll); }
+    }, 500);
+  }
 
   // Load Level 1 and start the game loop
   loadLevel(0);
@@ -428,18 +463,31 @@ const player = {
 
     // ---- Choose sprite: poodle or player ----
     const spriteAsset = isPoodle ? assets.poodle : assets.player;
-    const spriteLoaded = isPoodle ? (assets.poodle.loaded || assets.poodle.frames.length > 0) : assets.player.loaded;
+    const useVideo = isPoodle && assets.poodle.videoReady && assets.poodle.video;
+    const spriteLoaded = useVideo || (isPoodle ? (assets.poodle.loaded || assets.poodle.frames.length > 0) : assets.player.loaded);
+
+    // Ensure video is playing when poodle mode active
+    if (useVideo && assets.poodle.video.paused) assets.poodle.video.play().catch(() => {});
 
     // ---- Draw player/poodle sprite (head sticks out above corvette) ----
     if (spriteLoaded) {
-      const pImg = spriteAsset.frames.length > 1 ? spriteAsset.frames[this.animFrame % spriteAsset.frames.length] : spriteAsset.img;
+      let pImg, srcW, srcH;
+      if (useVideo) {
+        pImg = assets.poodle.video;
+        srcW = pImg.videoWidth || this.width;
+        srcH = pImg.videoHeight || this.height;
+      } else {
+        pImg = spriteAsset.frames.length > 1 ? spriteAsset.frames[this.animFrame % spriteAsset.frames.length] : spriteAsset.img;
+        srcW = pImg.naturalWidth;
+        srcH = pImg.naturalHeight;
+      }
       ctx.save();
       if (this.facing === -1) {
         ctx.translate(screenX + this.width, screenY);
         ctx.scale(-1, 1);
         if (corvetteMode) {
           ctx.drawImage(pImg,
-            0, 0, pImg.naturalWidth, pImg.naturalHeight * 0.5,
+            0, 0, srcW, srcH * 0.5,
             0, 0, this.width, this.height * 0.5);
         } else {
           ctx.drawImage(pImg, 0, 0, this.width, this.height);
@@ -447,7 +495,7 @@ const player = {
       } else {
         if (corvetteMode) {
           ctx.drawImage(pImg,
-            0, 0, pImg.naturalWidth, pImg.naturalHeight * 0.5,
+            0, 0, srcW, srcH * 0.5,
             screenX, screenY, this.width, this.height * 0.5);
         } else {
           ctx.drawImage(pImg, screenX, screenY, this.width, this.height);
@@ -1576,7 +1624,7 @@ function loadLevel(index) {
       npc: { x: 650, y: 450 - 80, width: 60, height: 80, animFrame: 0, animTimer: 0, facing: -1 },
       dialogueTimer: 0,
       dialogueChars: 0,
-      fullDialogue: "It's dangerous to go alone, here, take this",
+      fullDialogue: "It's dangerous to go alone. Here, take this.",
       swordY: -50,
       swordTargetY: 220,
       swordAnimFrame: 0,
@@ -2268,11 +2316,24 @@ function drawSecretLevel() {
   const npcScreenY = npc.y - camera.y;
 
   const useTalkAnim = (st.phase === "talk" || st.phase === "sword" || st.phase === "choice" || st.phase === "exit" || st.phase === "done");
+  const npcUseVideo = !useTalkAnim && assets.poodle.videoReady && assets.poodle.video;
   const npcAsset = useTalkAnim ? assets.poodleTalk : assets.poodle;
   const npcFrames = npcAsset.frames;
   const npcFrame = npcFrames.length > 0 ? npcFrames[npc.animFrame % npcFrames.length] : null;
 
-  if (npcFrame) {
+  if (npcUseVideo) {
+    // Draw from WebM video for walk phase
+    if (assets.poodle.video.paused) assets.poodle.video.play().catch(() => {});
+    ctx.save();
+    if (npc.facing === -1) {
+      ctx.translate(npcScreenX + npc.width, npcScreenY);
+      ctx.scale(-1, 1);
+      ctx.drawImage(assets.poodle.video, 0, 0, npc.width, npc.height);
+    } else {
+      ctx.drawImage(assets.poodle.video, npcScreenX, npcScreenY, npc.width, npc.height);
+    }
+    ctx.restore();
+  } else if (npcFrame) {
     ctx.save();
     if (npc.facing === -1) {
       ctx.translate(npcScreenX + npc.width, npcScreenY);
@@ -2307,9 +2368,28 @@ function drawSecretLevel() {
   if ((st.phase === "talk" || st.phase === "sword" || st.phase === "choice") && st.dialogueChars > 0) {
     const text = st.fullDialogue.substring(0, st.dialogueChars);
     const bubbleX = npcScreenX - 80;
-    const bubbleY = npcScreenY - 50;
     const bubbleW = 220;
-    const bubbleH = 36;
+
+    // Word-wrap text into lines (never split mid-word)
+    ctx.font = "11px monospace";
+    const maxW = bubbleW - 16;
+    const words = text.split(" ");
+    const lines = [];
+    let curLine = "";
+    for (const word of words) {
+      const testLine = curLine ? curLine + " " + word : word;
+      if (ctx.measureText(testLine).width > maxW && curLine) {
+        lines.push(curLine);
+        curLine = word;
+      } else {
+        curLine = testLine;
+      }
+    }
+    if (curLine) lines.push(curLine);
+
+    const lineH = 13;
+    const bubbleH = Math.max(36, lines.length * lineH + 14);
+    const bubbleY = npcScreenY - bubbleH - 14;
 
     ctx.fillStyle = "rgba(255,255,255,0.9)";
     ctx.beginPath();
@@ -2322,23 +2402,10 @@ function drawSecretLevel() {
     ctx.stroke();
 
     ctx.fillStyle = "#222";
-    ctx.font = "11px monospace";
     ctx.textAlign = "left";
-    // Wrap text into bubble
-    const maxW = bubbleW - 16;
-    let line = "";
-    let lineY = bubbleY + 14;
-    for (let i = 0; i < text.length; i++) {
-      const testLine = line + text[i];
-      if (ctx.measureText(testLine).width > maxW) {
-        ctx.fillText(line, bubbleX + 8, lineY);
-        line = text[i];
-        lineY += 13;
-      } else {
-        line = testLine;
-      }
+    for (let i = 0; i < lines.length; i++) {
+      ctx.fillText(lines[i], bubbleX + 8, bubbleY + 14 + i * lineH);
     }
-    ctx.fillText(line, bubbleX + 8, lineY);
   }
 
   // Draw floating sword

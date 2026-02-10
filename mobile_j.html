@@ -1710,7 +1710,7 @@ function loadLevel(index) {
       npc: { x: 650, y: 450 - 80, width: 60, height: 80, animFrame: 0, animTimer: 0, facing: -1 },
       dialogueTimer: 0,
       dialogueChars: 0,
-      fullDialogue: "It's dangerous to go alone, here, take this",
+      fullDialogue: "It's dangerous to go alone. Here, take this.",
       swordY: -50,
       swordTargetY: 220,
       swordAnimFrame: 0,
@@ -2376,9 +2376,28 @@ function drawSecretLevel() {
   if ((st.phase === "talk" || st.phase === "sword" || st.phase === "choice") && st.dialogueChars > 0) {
     const text = st.fullDialogue.substring(0, st.dialogueChars);
     const bubbleX = npcScreenX - 80;
-    const bubbleY = npcScreenY - 50;
     const bubbleW = 220;
-    const bubbleH = 36;
+
+    // Word-wrap text into lines (never split mid-word)
+    ctx.font = "11px monospace";
+    const maxW = bubbleW - 16;
+    const words = text.split(" ");
+    const lines = [];
+    let curLine = "";
+    for (const word of words) {
+      const testLine = curLine ? curLine + " " + word : word;
+      if (ctx.measureText(testLine).width > maxW && curLine) {
+        lines.push(curLine);
+        curLine = word;
+      } else {
+        curLine = testLine;
+      }
+    }
+    if (curLine) lines.push(curLine);
+
+    const lineH = 13;
+    const bubbleH = Math.max(36, lines.length * lineH + 14);
+    const bubbleY = npcScreenY - bubbleH - 14;
 
     ctx.fillStyle = "rgba(255,255,255,0.9)";
     ctx.beginPath();
@@ -2391,22 +2410,10 @@ function drawSecretLevel() {
     ctx.stroke();
 
     ctx.fillStyle = "#222";
-    ctx.font = "11px monospace";
     ctx.textAlign = "left";
-    const maxW = bubbleW - 16;
-    let line = "";
-    let lineY = bubbleY + 14;
-    for (let i = 0; i < text.length; i++) {
-      const testLine = line + text[i];
-      if (ctx.measureText(testLine).width > maxW) {
-        ctx.fillText(line, bubbleX + 8, lineY);
-        line = text[i];
-        lineY += 13;
-      } else {
-        line = testLine;
-      }
+    for (let i = 0; i < lines.length; i++) {
+      ctx.fillText(lines[i], bubbleX + 8, bubbleY + 14 + i * lineH);
     }
-    ctx.fillText(line, bubbleX + 8, lineY);
   }
 
   if (st.phase === "sword" || st.phase === "choice" || st.phase === "exit") {
