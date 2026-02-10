@@ -977,106 +977,124 @@ function startBeamSound() {
 
   if (isPoodle) {
     // === POODLE FART BEAM SOUND ===
+    // Randomize parameters each time so no two farts sound alike
+    const baseFreq = 55 + Math.random() * 40;       // 55-95 Hz fundamental
+    const flutterRate = 16 + Math.random() * 18;     // 16-34 Hz flapping speed
+    const flutterRate2 = flutterRate * (1.3 + Math.random() * 0.7); // offset second flutter
+    const wetness = 3 + Math.random() * 4;           // waveshaper drive 3-7
+    const noiseAmt = 0.03 + Math.random() * 0.04;    // how breathy/airy
+    const pitchDrift = 0.3 + Math.random() * 0.5;    // slow pitch wander speed
 
-    // Initial blast — short low burst
-    const blast = audioCtx.createOscillator();
-    const blastG = audioCtx.createGain();
-    const blastLp = audioCtx.createBiquadFilter();
-    blast.type = "sawtooth";
-    blast.frequency.setValueAtTime(90, t);
-    blast.frequency.exponentialRampToValueAtTime(55, t + 0.15);
-    blastLp.type = "lowpass"; blastLp.frequency.value = 250; blastLp.Q.value = 3;
-    blastG.gain.setValueAtTime(0.25, t);
-    blastG.gain.exponentialRampToValueAtTime(0.001, t + 0.2);
-    blast.connect(blastLp).connect(blastG).connect(audioCtx.destination);
-    blast.start(t); blast.stop(t + 0.25);
+    // --- Initial splutter burst (one-shot) ---
+    const burstNoise = audioCtx.createBufferSource();
+    burstNoise.buffer = createNoise(0.15);
+    const burstLp = audioCtx.createBiquadFilter();
+    burstLp.type = "lowpass"; burstLp.frequency.value = 300 + Math.random() * 200;
+    burstLp.Q.value = 4;
+    const burstG = audioCtx.createGain();
+    burstG.gain.setValueAtTime(0.2, t);
+    burstG.gain.exponentialRampToValueAtTime(0.001, t + 0.12);
+    burstNoise.connect(burstLp).connect(burstG).connect(audioCtx.destination);
+    burstNoise.start(t);
 
-    // Initial splutter noise
-    const splut = audioCtx.createBufferSource();
-    splut.buffer = createNoise(0.2);
-    const splutLp = audioCtx.createBiquadFilter();
-    splutLp.type = "lowpass"; splutLp.frequency.value = 400; splutLp.Q.value = 2;
-    const splutG = audioCtx.createGain();
-    splutG.gain.setValueAtTime(0.15, t);
-    splutG.gain.exponentialRampToValueAtTime(0.001, t + 0.18);
-    splut.connect(splutLp).connect(splutG).connect(audioCtx.destination);
-    splut.start(t);
-
-    // === Persistent rumble layers ===
-
-    // Layer 1: Deep rumble — triangle at ~65Hz with wobble
+    // --- Core buzz: sawtooth tone (the vibrating "lip" of the fart) ---
     const hum1 = audioCtx.createOscillator();
-    const hum1G = audioCtx.createGain();
+    hum1.type = "sawtooth";
+    hum1.frequency.value = baseFreq;
+    // Slow random pitch drift over time
+    hum1.frequency.setValueAtTime(baseFreq, t);
+    hum1.frequency.linearRampToValueAtTime(baseFreq * (0.85 + Math.random() * 0.3), t + 2);
+    hum1.frequency.linearRampToValueAtTime(baseFreq * (0.9 + Math.random() * 0.2), t + 4);
     const hum1Lp = audioCtx.createBiquadFilter();
-    hum1.type = "triangle";
-    hum1.frequency.value = 65;
-    hum1Lp.type = "lowpass"; hum1Lp.frequency.value = 200; hum1Lp.Q.value = 5;
-    hum1G.gain.value = 0.1;
+    hum1Lp.type = "lowpass"; hum1Lp.frequency.value = 250; hum1Lp.Q.value = 5;
+    const hum1G = audioCtx.createGain();
+    hum1G.gain.value = 0.12;
     hum1.connect(hum1Lp).connect(hum1G);
 
-    // Layer 2: Sub bass flutter — square at ~45Hz for that flappy vibration
+    // --- Second detuned buzz for thickness ---
     const hum2 = audioCtx.createOscillator();
-    const hum2G = audioCtx.createGain();
-    hum2.type = "square";
-    hum2.frequency.value = 45;
-    hum2G.gain.value = 0.06;
+    hum2.type = "sawtooth";
+    hum2.frequency.value = baseFreq * (0.98 + Math.random() * 0.04); // slight detune
     const hum2Lp = audioCtx.createBiquadFilter();
-    hum2Lp.type = "lowpass"; hum2Lp.frequency.value = 150; hum2Lp.Q.value = 3;
+    hum2Lp.type = "lowpass"; hum2Lp.frequency.value = 200; hum2Lp.Q.value = 3;
+    const hum2G = audioCtx.createGain();
+    hum2G.gain.value = 0.08;
     hum2.connect(hum2Lp).connect(hum2G);
 
-    // Layer 3: Mid-range buzz for the "brrrap" texture
-    const buzz = audioCtx.createOscillator();
-    const buzzG = audioCtx.createGain();
-    const buzzLp = audioCtx.createBiquadFilter();
-    buzz.type = "sawtooth";
-    buzz.frequency.value = 110;
-    buzzLp.type = "lowpass"; buzzLp.frequency.value = 350; buzzLp.Q.value = 4;
-    buzzG.gain.value = 0.04;
-    buzz.connect(buzzLp).connect(buzzG);
+    // --- THE KEY: Amplitude flutter (rapid on/off = flapping) ---
+    // This is what makes it sound like a fart vs just a low tone
+    const flutter1 = audioCtx.createOscillator();
+    flutter1.type = "square";  // hard on/off for pronounced flapping
+    flutter1.frequency.value = flutterRate;
+    const flutter1G = audioCtx.createGain();
+    flutter1G.gain.value = 0.5; // modulates between ~0.5 and ~1.5 of signal
+    flutter1.connect(flutter1G);
 
-    // Layer 4: Irregular flutter LFO — makes it sound organic and sputtery
+    // Second flutter at offset rate for irregular, organic pattern
+    const flutter2 = audioCtx.createOscillator();
+    flutter2.type = "triangle"; // softer edges for variety
+    flutter2.frequency.value = flutterRate2;
+    const flutter2G = audioCtx.createGain();
+    flutter2G.gain.value = 0.3;
+    flutter2.connect(flutter2G);
+
+    // Slow wander LFO to drift the flutter rates over time
     const lfo = audioCtx.createOscillator();
+    lfo.type = "sine";
+    lfo.frequency.value = pitchDrift;
     const lfoG = audioCtx.createGain();
-    lfo.type = "sawtooth";
-    lfo.frequency.value = 8; // fast flutter
-    lfoG.gain.value = 15;    // wide pitch modulation for flappy effect
+    lfoG.gain.value = 4; // drifts flutter rate by ±4Hz
     lfo.connect(lfoG);
-    lfoG.connect(hum1.frequency);
-    lfoG.connect(hum2.frequency);
-    lfoG.connect(buzz.frequency);
+    lfoG.connect(flutter1.frequency);
+    lfoG.connect(flutter2.frequency);
+    // Also slowly wobble the main pitch
+    const lfoG2 = audioCtx.createGain();
+    lfoG2.gain.value = 8;
+    lfo.connect(lfoG2);
+    lfoG2.connect(hum1.frequency);
+    lfoG2.connect(hum2.frequency);
 
-    // Layer 5: Filtered brown noise for airy hiss
-    const nBuf = createNoise(2);
+    // --- Breathy air noise layer ---
     const noise = audioCtx.createBufferSource();
-    noise.buffer = nBuf;
+    noise.buffer = createNoise(2);
     noise.loop = true;
     const nLp = audioCtx.createBiquadFilter();
-    nLp.type = "lowpass"; nLp.frequency.value = 500; nLp.Q.value = 1;
+    nLp.type = "lowpass"; nLp.frequency.value = 350; nLp.Q.value = 2;
     const nG = audioCtx.createGain();
-    nG.gain.value = 0.04;
+    nG.gain.value = noiseAmt;
     noise.connect(nLp).connect(nG);
 
-    // Waveshaper for wet, squelchy distortion
+    // --- Amplitude modulation bus: buzz signals go through flutter ---
+    const amGain = audioCtx.createGain();
+    amGain.gain.value = 0.5; // base level
+    flutter1G.connect(amGain.gain); // flutter modulates the gain
+    flutter2G.connect(amGain.gain);
+    hum1G.connect(amGain);
+    hum2G.connect(amGain);
+
+    // --- Waveshaper for wet squelchy distortion ---
     const ws = audioCtx.createWaveShaper();
     const curve = new Float32Array(256);
-    for (let i = 0; i < 256; i++) { const x = (i / 128) - 1; curve[i] = Math.tanh(x * 5); }
+    for (let i = 0; i < 256; i++) {
+      const x = (i / 128) - 1;
+      curve[i] = Math.tanh(x * wetness) + 0.1 * Math.sin(x * 10); // added sine ripple for squelch
+    }
     ws.curve = curve;
 
-    // Master gain with fade-in
+    // --- Master output ---
     const gainMaster = audioCtx.createGain();
     gainMaster.gain.setValueAtTime(0, t);
-    gainMaster.gain.linearRampToValueAtTime(1, t + 0.05);
+    gainMaster.gain.linearRampToValueAtTime(1, t + 0.03);
 
-    hum1G.connect(ws);
-    hum2G.connect(ws);
-    buzzG.connect(ws);
+    amGain.connect(ws);
     ws.connect(gainMaster);
     nG.connect(gainMaster);
     gainMaster.connect(audioCtx.destination);
 
-    hum1.start(); hum2.start(); buzz.start(); lfo.start(); noise.start();
+    hum1.start(); hum2.start(); flutter1.start(); flutter2.start(); lfo.start(); noise.start();
 
-    beamSoundNodes = { hum1, hum2, buzz, lfo, noise, gainMaster };
+    beamSoundNodes = { hum1, hum2, buzz: flutter1, lfo, noise, gainMaster,
+                       _extra: [flutter2] };
     return;
   }
 
@@ -1201,6 +1219,7 @@ function stopBeamSound() {
     try { nodes.buzz.stop(); } catch(e) {}
     try { nodes.lfo.stop(); } catch(e) {}
     try { nodes.noise.stop(); } catch(e) {}
+    if (nodes._extra) nodes._extra.forEach(n => { try { n.stop(); } catch(e) {} });
     nodes.gainMaster.disconnect();
   }, 200);
 }
