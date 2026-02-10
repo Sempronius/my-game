@@ -475,11 +475,11 @@ const player = {
       }
     }
 
-    // ---- Sword on player's side ----
+    // ---- Sword on player's far side (right when facing right, left when facing left) ----
     if (hasSword && !corvetteMode) {
       const swordW = 16;
       const swordH = 32;
-      const swordOffsetX = this.facing === 1 ? -swordW + 4 : this.width - 4;
+      const swordOffsetX = this.facing === 1 ? this.width - 4 : -swordW + 4;
       const swordOffsetY = this.height / 2 - swordH / 2;
 
       if (assets.sword.loaded) {
@@ -1271,6 +1271,125 @@ function playSound(type) {
     ns2.connect(bp2).connect(ng2).connect(audioCtx.destination);
     ns2.start(t);
   }
+
+  else if (type === "sword_appear") {
+    // Epic sword reveal: celestial choir chord + shimmering harmonics + deep power swell
+    // ~4 seconds of dramatic, building music
+
+    // Layer 1: Choir-like pad — stacked fifths with slow attack (C4-G4-C5-E5)
+    const choirNotes = [261.6, 392.0, 523.3, 659.3];
+    for (let i = 0; i < choirNotes.length; i++) {
+      const o = audioCtx.createOscillator();
+      const g1 = audioCtx.createGain();
+      const lp = audioCtx.createBiquadFilter();
+      o.type = "sawtooth";
+      o.frequency.value = choirNotes[i];
+      lp.type = "lowpass";
+      lp.frequency.setValueAtTime(600, t);
+      lp.frequency.linearRampToValueAtTime(1800, t + 1.5);
+      lp.frequency.linearRampToValueAtTime(1200, t + 4.0);
+      lp.Q.value = 1;
+      g1.gain.setValueAtTime(0, t);
+      g1.gain.linearRampToValueAtTime(0.04, t + 0.8);
+      g1.gain.setValueAtTime(0.04, t + 2.5);
+      g1.gain.linearRampToValueAtTime(0, t + 4.0);
+      o.connect(lp).connect(g1).connect(audioCtx.destination);
+      o.start(t); o.stop(t + 4.1);
+
+      // Slight detune for width
+      const o2 = audioCtx.createOscillator();
+      const g2 = audioCtx.createGain();
+      o2.type = "sawtooth";
+      o2.frequency.value = choirNotes[i] * 1.003;
+      g2.gain.setValueAtTime(0, t);
+      g2.gain.linearRampToValueAtTime(0.03, t + 0.8);
+      g2.gain.setValueAtTime(0.03, t + 2.5);
+      g2.gain.linearRampToValueAtTime(0, t + 4.0);
+      o2.connect(lp).connect(g2).connect(audioCtx.destination);
+      o2.start(t); o2.stop(t + 4.1);
+    }
+
+    // Layer 2: Rising shimmer — metallic harmonics sweep up
+    const shimmer = audioCtx.createOscillator();
+    const shimGain = audioCtx.createGain();
+    const shimBp = audioCtx.createBiquadFilter();
+    shimmer.type = "square";
+    shimmer.frequency.setValueAtTime(2000, t);
+    shimmer.frequency.exponentialRampToValueAtTime(6000, t + 2.0);
+    shimmer.frequency.exponentialRampToValueAtTime(4000, t + 3.5);
+    shimBp.type = "bandpass";
+    shimBp.frequency.setValueAtTime(3000, t);
+    shimBp.frequency.exponentialRampToValueAtTime(8000, t + 2.0);
+    shimBp.Q.value = 8;
+    shimGain.gain.setValueAtTime(0, t + 0.3);
+    shimGain.gain.linearRampToValueAtTime(0.015, t + 1.0);
+    shimGain.gain.linearRampToValueAtTime(0.02, t + 2.0);
+    shimGain.gain.linearRampToValueAtTime(0, t + 3.5);
+    shimmer.connect(shimBp).connect(shimGain).connect(audioCtx.destination);
+    shimmer.start(t + 0.3); shimmer.stop(t + 3.6);
+
+    // Layer 3: Deep power bass — sub-bass swell with octave
+    const bass = audioCtx.createOscillator();
+    const bassG = audioCtx.createGain();
+    bass.type = "sine";
+    bass.frequency.setValueAtTime(65.4, t); // C2
+    bass.frequency.setValueAtTime(65.4, t + 1.5);
+    bass.frequency.linearRampToValueAtTime(130.8, t + 2.5); // octave up
+    bassG.gain.setValueAtTime(0, t);
+    bassG.gain.linearRampToValueAtTime(0.15, t + 1.0);
+    bassG.gain.setValueAtTime(0.15, t + 2.5);
+    bassG.gain.linearRampToValueAtTime(0, t + 4.0);
+    bass.connect(bassG).connect(audioCtx.destination);
+    bass.start(t); bass.stop(t + 4.1);
+
+    // Layer 4: Impact hit at the peak — dramatic reveal moment
+    const impact = audioCtx.createOscillator();
+    const impG = audioCtx.createGain();
+    impact.type = "sine";
+    impact.frequency.setValueAtTime(80, t + 2.0);
+    impact.frequency.exponentialRampToValueAtTime(40, t + 2.4);
+    impG.gain.setValueAtTime(0, t + 1.99);
+    impG.gain.linearRampToValueAtTime(0.2, t + 2.01);
+    impG.gain.exponentialRampToValueAtTime(0.001, t + 2.5);
+    impact.connect(impG).connect(audioCtx.destination);
+    impact.start(t + 2.0); impact.stop(t + 2.5);
+
+    // Impact noise burst
+    const impNoise = audioCtx.createBufferSource();
+    impNoise.buffer = createNoise(0.3);
+    const impBp = audioCtx.createBiquadFilter();
+    impBp.type = "bandpass"; impBp.frequency.value = 4000; impBp.Q.value = 1;
+    const impNg = audioCtx.createGain();
+    impNg.gain.setValueAtTime(0, t + 1.99);
+    impNg.gain.linearRampToValueAtTime(0.06, t + 2.02);
+    impNg.gain.exponentialRampToValueAtTime(0.001, t + 2.3);
+    impNoise.connect(impBp).connect(impNg).connect(audioCtx.destination);
+    impNoise.start(t + 2.0);
+
+    // Layer 5: Ethereal bell tones — descending arpeggio at the end
+    const bellNotes = [1318.5, 1047, 784, 659.3]; // E6, C6, G5, E5
+    for (let i = 0; i < bellNotes.length; i++) {
+      const bell = audioCtx.createOscillator();
+      const bellG = audioCtx.createGain();
+      bell.type = "sine";
+      bell.frequency.value = bellNotes[i];
+      const bellT = t + 2.2 + i * 0.2;
+      bellG.gain.setValueAtTime(0.06, bellT);
+      bellG.gain.exponentialRampToValueAtTime(0.001, bellT + 0.8);
+      bell.connect(bellG).connect(audioCtx.destination);
+      bell.start(bellT); bell.stop(bellT + 0.9);
+
+      // Harmonic overtone
+      const bell2 = audioCtx.createOscillator();
+      const bellG2 = audioCtx.createGain();
+      bell2.type = "sine";
+      bell2.frequency.value = bellNotes[i] * 2.0;
+      bellG2.gain.setValueAtTime(0.02, bellT);
+      bellG2.gain.exponentialRampToValueAtTime(0.001, bellT + 0.5);
+      bell2.connect(bellG2).connect(audioCtx.destination);
+      bell2.start(bellT); bell2.stop(bellT + 0.6);
+    }
+  }
 }
 
 /** Deep-copy an object (works for plain data) */
@@ -1932,6 +2051,7 @@ function updateSecretLevel() {
     // All text shown → advance to sword phase
     if (st.dialogueChars >= st.fullDialogue.length && st.dialogueTimer > st.fullDialogue.length * 3 + 60) {
       st.phase = "sword";
+      playSound("sword_appear");
     }
   }
 
