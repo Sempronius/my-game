@@ -95,6 +95,11 @@ const assets = {
   poodleTalk:      { img: new Image(), loaded: false, frames: [] },
   sword:           { img: new Image(), loaded: false, frames: [] },
   poodleCar:       { img: new Image(), loaded: false },
+  spaceShip:       { img: new Image(), loaded: false, frames: [] },
+  spaceShipLanded: { img: new Image(), loaded: false, frames: [] },
+  spaceEnemy:      { img: new Image(), loaded: false },
+  spaceBattlecruiser: { img: new Image(), loaded: false },
+  spaceBg:         { img: new Image(), loaded: false },
 };
 
 /** Returns a Promise that resolves once an image loads (or fails gracefully) */
@@ -305,6 +310,11 @@ async function loadAllAssets() {
     // poodle + poodleTalk generated from code below (no PNG needed)
     loadImage(assets.sword,           "assets/sword/sword_j.png"),
     loadImage(assets.poodleCar,       "assets/poodle/poodle_car_j.png"),
+    loadImage(assets.spaceShip,       "assets/space/spaceship_j.png"),
+    loadImage(assets.spaceShipLanded, "assets/space/spaceship_landed_j.png"),
+    loadImage(assets.spaceEnemy,      "assets/space/enemy_ship_j.png"),
+    loadImage(assets.spaceBattlecruiser, "assets/space/battlecruiser_j.png"),
+    loadImage(assets.spaceBg,         "assets/space/space_bg_j.png"),
   ]);
 
   // Load animation frames (numbered variants like player_j1.png, player_j2.png, ...)
@@ -315,6 +325,8 @@ async function loadAllAssets() {
     loadAnimFrames(assets.secretCave, "assets/backgrounds/secret_cave_j.png"),
     // poodle + poodleTalk use procedural frames (no PNG loading)
     loadAnimFrames(assets.sword,      "assets/sword/sword_j.png"),
+    loadAnimFrames(assets.spaceShip,  "assets/space/spaceship_j.png"),
+    loadAnimFrames(assets.spaceShipLanded, "assets/space/spaceship_landed_j.png"),
   ]);
 
   // Generate poodle sprites from code (no PNG files needed)
@@ -414,8 +426,10 @@ const player = {
   },
 
   update() {
-    // Don't allow input during transitions or victory
-    if (transitionTimer > 0 || victoryScreen) return;
+    // Don't allow input during transitions, victory, cutscene, or space mode
+    if (transitionTimer > 0 || victoryScreen || spaceMode) return;
+    // Allow player movement during ship_descend and ship_idle cutscene phases
+    if (cutsceneState && cutsceneState.phase !== "ship_descend" && cutsceneState.phase !== "ship_idle") return;
 
     // ---- Auto-size hitbox to match sprite aspect ratio ----
     if (isPoodle) {
@@ -548,6 +562,12 @@ const player = {
   },
 
   draw() {
+    // Hide player during cutscene boarding / space mode
+    if (spaceMode) return;
+    if (cutsceneState && (cutsceneState.phase === "player_board" ||
+        cutsceneState.phase === "engines_fire" || cutsceneState.phase === "blast_off" ||
+        cutsceneState.phase === "fade_out")) return;
+
     const screenX = this.x - camera.x;
     const screenY = this.y - camera.y;
 
@@ -826,6 +846,16 @@ const levels = [
     portal: null,
     boss: null,
   },
+
+  // ---- LEVEL 4 (Space) — skeleton entry, logic handled by spaceMode flag ----
+  {
+    backgroundKey: "spaceBg",
+    platforms: [],
+    enemies: [],
+    decorations: [],
+    portal: null,
+    boss: null,
+  },
 ];
 
 // =============================================================================
@@ -865,6 +895,30 @@ let secretLevelState = null;    // null or { phase, npc, dialogueTimer, ... }
 let secretCaveAnimTimer = 0;    // For animated cave background
 let secretCaveAnimFrame = 0;
 let beamDamageTimer = 0;        // Cooldown between beam damage ticks
+
+// Space shooter state
+let spaceMode = false;
+let cutsceneState = null;
+let spaceScrollX = 0;
+let spaceDistance = 0;
+let spaceWaveTimer = 0;
+let spaceWaveIndex = 0;
+let spaceEnemies = [];
+let spaceEnemyProjectiles = [];
+let spaceBoss = null;
+let spaceBossActive = false;
+let spaceBossProjectiles = [];
+let spaceParticles = [];
+let spaceVictory = false;
+let spaceEngineNodes = null;
+
+// Space constants
+const SPACE_SCROLL_SPEED = 1.5;
+const SPACE_MOVE_SPEED = 4;
+const SPACE_FRICTION = 0.88;
+const SPACE_PLAYER_SHIP_W = 80;
+const SPACE_PLAYER_SHIP_H = 48;
+const SPACE_BOSS_THRESHOLD = 15000;
 
 // =============================================================================
 // WEB AUDIO API — PROCEDURAL SOUND EFFECTS (zero file size)
@@ -1828,6 +1882,156 @@ function playSound(type) {
       bell2.start(bellT); bell2.stop(bellT + 0.6);
     }
   }
+
+  else if (type === "ship_engine") {
+    // Rocket warmup: rising filtered noise + low throb
+    const ns = audioCtx.createBufferSource();
+    ns.buffer = createNoise(2);
+    const bp = audioCtx.createBiquadFilter();
+    bp.type = "bandpass";
+    bp.frequency.setValueAtTime(200, t);
+    bp.frequency.exponentialRampToValueAtTime(1200, t + 1.5);
+    bp.Q.value = 3;
+    const ng = audioCtx.createGain();
+    ng.gain.setValueAtTime(0.02, t);
+    ng.gain.linearRampToValueAtTime(0.12, t + 1.0);
+    ng.gain.exponentialRampToValueAtTime(0.001, t + 2.0);
+    ns.connect(bp).connect(ng).connect(audioCtx.destination);
+    ns.start(t);
+    // Low throb
+    const osc = audioCtx.createOscillator();
+    const og = audioCtx.createGain();
+    osc.type = "sawtooth";
+    osc.frequency.setValueAtTime(40, t);
+    osc.frequency.linearRampToValueAtTime(80, t + 1.5);
+    og.gain.setValueAtTime(0.05, t);
+    og.gain.linearRampToValueAtTime(0.15, t + 1.0);
+    og.gain.exponentialRampToValueAtTime(0.001, t + 2.0);
+    osc.connect(og).connect(audioCtx.destination);
+    osc.start(t); osc.stop(t + 2.0);
+  }
+
+  else if (type === "ship_launch") {
+    // Powerful launch burst: noise + sub rumble + rising pitch
+    const ns = audioCtx.createBufferSource();
+    ns.buffer = createNoise(1.5);
+    const lp = audioCtx.createBiquadFilter();
+    lp.type = "lowpass"; lp.frequency.setValueAtTime(800, t);
+    lp.frequency.exponentialRampToValueAtTime(4000, t + 0.5);
+    lp.frequency.exponentialRampToValueAtTime(1000, t + 1.5);
+    lp.Q.value = 2;
+    const ng = audioCtx.createGain();
+    ng.gain.setValueAtTime(0.15, t);
+    ng.gain.exponentialRampToValueAtTime(0.001, t + 1.5);
+    ns.connect(lp).connect(ng).connect(audioCtx.destination);
+    ns.start(t);
+    // Sub rumble
+    const sub = audioCtx.createOscillator();
+    const sg = audioCtx.createGain();
+    sub.type = "sine";
+    sub.frequency.setValueAtTime(30, t);
+    sub.frequency.exponentialRampToValueAtTime(60, t + 0.5);
+    sg.gain.setValueAtTime(0.2, t);
+    sg.gain.exponentialRampToValueAtTime(0.001, t + 1.2);
+    sub.connect(sg).connect(audioCtx.destination);
+    sub.start(t); sub.stop(t + 1.2);
+  }
+
+  else if (type === "boss_victory") {
+    // Epic victory fanfare: ascending major chord arpeggios + bright pad + timpani roll
+    const notes = [261.6, 329.6, 392, 523.3, 659.3, 784]; // C4 E4 G4 C5 E5 G5
+    // Arpeggiated chord stabs
+    for (let i = 0; i < notes.length; i++) {
+      const osc = audioCtx.createOscillator();
+      const g = audioCtx.createGain();
+      osc.type = "sawtooth";
+      osc.frequency.value = notes[i];
+      g.gain.setValueAtTime(0, t + i * 0.12);
+      g.gain.linearRampToValueAtTime(0.08, t + i * 0.12 + 0.05);
+      g.gain.setValueAtTime(0.08, t + i * 0.12 + 0.2);
+      g.gain.exponentialRampToValueAtTime(0.001, t + i * 0.12 + 1.5);
+      osc.connect(g).connect(audioCtx.destination);
+      osc.start(t + i * 0.12);
+      osc.stop(t + i * 0.12 + 1.5);
+    }
+    // Sustained bright pad chord (C major)
+    const padNotes = [261.6, 329.6, 392, 523.3];
+    for (const freq of padNotes) {
+      const osc = audioCtx.createOscillator();
+      const g = audioCtx.createGain();
+      osc.type = "triangle";
+      osc.frequency.value = freq;
+      g.gain.setValueAtTime(0, t + 0.6);
+      g.gain.linearRampToValueAtTime(0.05, t + 1.0);
+      g.gain.setValueAtTime(0.05, t + 2.5);
+      g.gain.exponentialRampToValueAtTime(0.001, t + 4.0);
+      osc.connect(g).connect(audioCtx.destination);
+      osc.start(t + 0.6);
+      osc.stop(t + 4.0);
+    }
+    // Timpani-like low boom
+    const timp = audioCtx.createOscillator();
+    const tg = audioCtx.createGain();
+    timp.type = "sine";
+    timp.frequency.setValueAtTime(80, t);
+    timp.frequency.exponentialRampToValueAtTime(40, t + 0.5);
+    tg.gain.setValueAtTime(0.15, t);
+    tg.gain.exponentialRampToValueAtTime(0.001, t + 1.0);
+    timp.connect(tg).connect(audioCtx.destination);
+    timp.start(t); timp.stop(t + 1.0);
+    // Rising shimmer (filtered noise)
+    const ns = audioCtx.createBufferSource();
+    ns.buffer = createNoise(3);
+    const hp = audioCtx.createBiquadFilter();
+    hp.type = "highpass";
+    hp.frequency.setValueAtTime(2000, t + 0.5);
+    hp.frequency.exponentialRampToValueAtTime(8000, t + 2.5);
+    hp.Q.value = 1;
+    const ng = audioCtx.createGain();
+    ng.gain.setValueAtTime(0, t + 0.5);
+    ng.gain.linearRampToValueAtTime(0.03, t + 1.5);
+    ng.gain.exponentialRampToValueAtTime(0.001, t + 3.5);
+    ns.connect(hp).connect(ng).connect(audioCtx.destination);
+    ns.start(t + 0.5);
+  }
+
+  else if (type === "missile_launch") {
+    // Quick whoosh
+    const ns = audioCtx.createBufferSource();
+    ns.buffer = createNoise(0.15);
+    const bp = audioCtx.createBiquadFilter();
+    bp.type = "bandpass";
+    bp.frequency.setValueAtTime(1000, t);
+    bp.frequency.exponentialRampToValueAtTime(4000, t + 0.08);
+    bp.Q.value = 3;
+    const ng = audioCtx.createGain();
+    ng.gain.setValueAtTime(0.06, t);
+    ng.gain.exponentialRampToValueAtTime(0.001, t + 0.12);
+    ns.connect(bp).connect(ng).connect(audioCtx.destination);
+    ns.start(t);
+  }
+
+  else if (type === "boss_enter") {
+    // Warning alarm: two-tone square waves
+    for (let i = 0; i < 3; i++) {
+      const o1 = audioCtx.createOscillator();
+      const g1 = audioCtx.createGain();
+      o1.type = "square";
+      o1.frequency.value = 440;
+      g1.gain.setValueAtTime(0.08, t + i * 0.4);
+      g1.gain.exponentialRampToValueAtTime(0.001, t + i * 0.4 + 0.15);
+      o1.connect(g1).connect(audioCtx.destination);
+      o1.start(t + i * 0.4); o1.stop(t + i * 0.4 + 0.15);
+      const o2 = audioCtx.createOscillator();
+      const g2 = audioCtx.createGain();
+      o2.type = "square";
+      o2.frequency.value = 550;
+      g2.gain.setValueAtTime(0.08, t + i * 0.4 + 0.2);
+      g2.gain.exponentialRampToValueAtTime(0.001, t + i * 0.4 + 0.35);
+      o2.connect(g2).connect(audioCtx.destination);
+      o2.start(t + i * 0.4 + 0.2); o2.stop(t + i * 0.4 + 0.35);
+    }
+  }
 }
 
 /** Deep-copy an object (works for plain data) */
@@ -2157,7 +2361,7 @@ function updateBoss() {
       if (activeBoss.hp <= 0) {
         spawnDeathExplosion(activeBoss, 4, 4, "boss");
         activeBoss.alive = false;
-        victoryScreen = true;
+        if (currentLevel === 1) { startCutscene(); } else { victoryScreen = true; }
         playSound("boss_death");
       } else {
         playSound("boss_hit");
@@ -2892,7 +3096,7 @@ function updateProjectiles() {
         if (activeBoss.hp <= 0) {
           spawnDeathExplosion(activeBoss, 4, 4, "boss");
           activeBoss.alive = false;
-          victoryScreen = true;
+          if (currentLevel === 1) { startCutscene(); } else { victoryScreen = true; }
           playSound("boss_death");
         } else {
           playSound("boss_hit");
@@ -3024,7 +3228,7 @@ function updateBeam() {
       if (activeBoss.hp <= 0) {
         spawnDeathExplosion(activeBoss, 4, 4, "boss");
         activeBoss.alive = false;
-        victoryScreen = true;
+        if (currentLevel === 1) { startCutscene(); } else { victoryScreen = true; }
         playSound("boss_death");
       } else {
         playSound("boss_hit");
@@ -3242,7 +3446,7 @@ function updateDeathEffects() {
     for (const piece of eff.pieces) {
       piece.x += piece.velX;
       piece.y += piece.velY;
-      piece.velY += GRAVITY * 0.8; // Gravity on pieces
+      piece.velY += spaceMode ? 0 : GRAVITY * 0.8; // No gravity in space
       piece.rot += piece.rotSpeed;
     }
 
@@ -3257,8 +3461,8 @@ function drawDeathEffects() {
     const alpha = eff.timer < 15 ? eff.timer / 15 : 1;
 
     for (const piece of eff.pieces) {
-      const screenX = piece.x - camera.x;
-      const screenY = piece.y - camera.y;
+      const screenX = spaceMode ? piece.x : piece.x - camera.x;
+      const screenY = spaceMode ? piece.y : piece.y - camera.y;
 
       ctx.save();
       ctx.globalAlpha = alpha;
@@ -3301,7 +3505,7 @@ let deathMessage = "";
 let deathTimer = 0;
 
 function damagePlayer(amount) {
-  if (transitionTimer > 0 || victoryScreen) return;
+  if (transitionTimer > 0 || victoryScreen || cutsceneState) return;
   if (player.invincibleTimer > 0) return;
 
   player.hp -= amount;
@@ -3319,7 +3523,11 @@ function die() {
   if (transitionTimer > 0 || victoryScreen) return;
   deathMessage = "You died! Restarting...";
   deathTimer = 90;
-  loadLevel(currentLevel);
+  if (spaceMode) {
+    loadSpaceLevel();
+  } else {
+    loadLevel(currentLevel);
+  }
 }
 
 // =============================================================================
@@ -3551,7 +3759,7 @@ function drawHUD() {
   ctx.fillStyle = "white";
   ctx.font = "bold 14px monospace";
   ctx.textAlign = "right";
-  ctx.fillText(currentLevel === 2 ? "Secret!" : `Level ${currentLevel + 1}`, canvas.width - 16, 27);
+  ctx.fillText(currentLevel === 2 ? "Secret!" : currentLevel === 3 ? "Space" : `Level ${currentLevel + 1}`, canvas.width - 16, 27);
   ctx.textAlign = "left";
 
   // Controls hint (top-left)
@@ -3607,15 +3815,1148 @@ function drawHUD() {
 }
 
 // =============================================================================
+// SPACE SHOOTER — CUTSCENE, LEVEL, ENEMIES, BOSS
+// =============================================================================
+
+// ---- Cutscene (after Level 2 boss death) ----
+
+function startCutscene() {
+  // Find a landing spot — boss arena ground platform
+  const groundY = 450;
+  cutsceneState = {
+    phase: "ship_descend",
+    timer: 0,
+    shipX: player.x + 60,
+    shipY: -100,
+    shipTargetY: groundY - 56,
+    playerTargetX: player.x + 80,
+    fadeAlpha: 0,
+    particles: [],
+    shipAnimFrame: 0,
+    shipAnimTimer: 0,
+  };
+  playSound("boss_victory");
+  stopEngine();
+  stopBeamSound();
+}
+
+function updateCutscene() {
+  if (!cutsceneState) return;
+  const cs = cutsceneState;
+  cs.timer++;
+
+  if (cs.phase === "ship_descend") {
+    // Ship descends from top with deceleration (slow, ~4 seconds)
+    const progress = Math.min(cs.timer / 240, 1);
+    const ease = 1 - Math.pow(1 - progress, 3);
+    cs.shipY = -100 + (cs.shipTargetY + 100) * ease;
+    // Engine particles below ship
+    if (cs.timer % 3 === 0) {
+      cs.particles.push({
+        x: cs.shipX + 30 + Math.random() * 20,
+        y: cs.shipY + 50,
+        velX: (Math.random() - 0.5) * 2,
+        velY: 2 + Math.random() * 3,
+        life: 20 + Math.random() * 15,
+        maxLife: 35,
+        size: 3 + Math.random() * 4,
+      });
+    }
+    if (cs.timer >= 240) { cs.phase = "ship_idle"; cs.timer = 0; }
+  }
+  else if (cs.phase === "ship_idle") {
+    // Ship sits on ground — player must walk to it themselves
+    // Check if player overlaps the ship hitbox
+    const shipW = 80, shipH = 56;
+    if (player.x + player.width > cs.shipX && player.x < cs.shipX + shipW &&
+        player.y + player.height > cs.shipY && player.y < cs.shipY + shipH) {
+      cs.phase = "player_board"; cs.timer = 0;
+    }
+  }
+  else if (cs.phase === "player_board") {
+    // Player fades out (boarding ship)
+    cs.fadeAlpha = Math.min(cs.timer / 30, 1);
+    if (cs.timer >= 30) { cs.phase = "engines_fire"; cs.timer = 0; }
+  }
+  else if (cs.phase === "engines_fire") {
+    // Engine particles ramp up, ship vibrates
+    if (cs.timer % 2 === 0) {
+      for (let i = 0; i < 3; i++) {
+        cs.particles.push({
+          x: cs.shipX + 25 + Math.random() * 30,
+          y: cs.shipY + 50,
+          velX: (Math.random() - 0.5) * 3,
+          velY: 3 + Math.random() * 4,
+          life: 25 + Math.random() * 15,
+          maxLife: 40,
+          size: 4 + Math.random() * 5,
+        });
+      }
+    }
+    if (cs.timer === 1) playSound("ship_engine");
+    if (cs.timer >= 60) { cs.phase = "blast_off"; cs.timer = 0; }
+  }
+  else if (cs.phase === "blast_off") {
+    // Ship accelerates upward
+    const accel = Math.pow(cs.timer / 30, 2);
+    cs.shipY -= 2 + accel * 4;
+    // Intense engine trail
+    if (cs.timer % 1 === 0) {
+      for (let i = 0; i < 4; i++) {
+        cs.particles.push({
+          x: cs.shipX + 20 + Math.random() * 40,
+          y: cs.shipY + 50,
+          velX: (Math.random() - 0.5) * 4,
+          velY: 4 + Math.random() * 6,
+          life: 30 + Math.random() * 20,
+          maxLife: 50,
+          size: 5 + Math.random() * 6,
+        });
+      }
+    }
+    if (cs.timer === 1) playSound("ship_launch");
+    if (cs.timer >= 90) { cs.phase = "fade_out"; cs.timer = 0; }
+  }
+  else if (cs.phase === "fade_out") {
+    cs.fadeAlpha = Math.min(cs.timer / 30, 1);
+    if (cs.timer === 30) loadSpaceLevel();
+    if (cs.timer >= 60) { cutsceneState = null; }
+  }
+
+  // Advance ship animation frame (~300ms = 18 frames at 60fps)
+  cs.shipAnimTimer++;
+  if (cs.shipAnimTimer >= 18) {
+    cs.shipAnimTimer = 0;
+    cs.shipAnimFrame++;
+  }
+
+  // Update particles
+  for (let i = cs.particles.length - 1; i >= 0; i--) {
+    const p = cs.particles[i];
+    p.x += p.velX;
+    p.y += p.velY;
+    p.life--;
+    if (p.life <= 0) cs.particles.splice(i, 1);
+  }
+}
+
+function drawCutscene() {
+  if (!cutsceneState) return;
+  const cs = cutsceneState;
+
+  // Draw ship — use flying sprite for descend/blast_off, landed for ground phases
+  const shipW = 80, shipH = 56;
+  const shipScreenX = cs.shipX - camera.x;
+  const shipScreenY = cs.shipY - camera.y;
+  const vib = cs.phase === "engines_fire" ? (Math.random() - 0.5) * 4 : 0;
+
+  const isFlying = cs.phase === "ship_descend" || cs.phase === "blast_off";
+  const shipAsset = isFlying ? assets.spaceShip : assets.spaceShipLanded;
+  const hasFrames = shipAsset.frames && shipAsset.frames.length > 0;
+
+  if (hasFrames || shipAsset.loaded) {
+    const frameIdx = hasFrames ? cs.shipAnimFrame % shipAsset.frames.length : 0;
+    const img = hasFrames ? shipAsset.frames[frameIdx] : shipAsset.img;
+    ctx.drawImage(img, shipScreenX + vib, shipScreenY, shipW, shipH);
+  } else {
+    // Fallback: triangular ship shape
+    ctx.save();
+    ctx.fillStyle = "#4488ff";
+    ctx.beginPath();
+    ctx.moveTo(shipScreenX + vib + shipW / 2, shipScreenY);
+    ctx.lineTo(shipScreenX + vib + shipW, shipScreenY + shipH);
+    ctx.lineTo(shipScreenX + vib, shipScreenY + shipH);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = "#88bbff";
+    ctx.fillRect(shipScreenX + vib + shipW / 2 - 10, shipScreenY + 10, 20, 20);
+    ctx.restore();
+  }
+
+  // Draw particles (engine flame)
+  for (const p of cs.particles) {
+    const alpha = p.life / p.maxLife;
+    const hue = 30 + (1 - alpha) * 30; // orange to red
+    ctx.save();
+    ctx.globalAlpha = alpha * 0.8;
+    ctx.fillStyle = `hsl(${hue}, 100%, ${50 + alpha * 30}%)`;
+    ctx.fillRect(p.x - camera.x - p.size / 2, p.y - camera.y - p.size / 2, p.size, p.size);
+    ctx.restore();
+  }
+
+  // Fade player out during boarding
+  if (cs.phase === "player_board") {
+    // Player is being drawn normally; we overlay to hide them
+    // (handled by alpha in main draw cycle)
+  }
+
+  // Fade to black during fade_out
+  if (cs.phase === "fade_out") {
+    ctx.fillStyle = `rgba(0, 0, 0, ${cs.fadeAlpha})`;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+  }
+}
+
+// ---- Space Level Core ----
+
+function loadSpaceLevel() {
+  spaceMode = true;
+  currentLevel = 3;
+  spaceScrollX = 0;
+  spaceDistance = 0;
+  spaceWaveTimer = 60;
+  spaceWaveIndex = 0;
+  spaceEnemies = [];
+  spaceEnemyProjectiles = [];
+  spaceBoss = null;
+  spaceBossActive = false;
+  spaceBossProjectiles = [];
+  spaceVictory = false;
+
+  // Clear platformer state
+  activePlatforms = [];
+  activeEnemies = [];
+  activeDecorations = [];
+  activePortal = null;
+  activeBoss = null;
+  projectiles = [];
+  bossProjectiles = [];
+  deathEffects = [];
+  shootCooldown = 0;
+  secretDoor = null;
+  secretLevelState = null;
+  victoryScreen = false;
+  transitionTimer = 0;
+
+  // Reset player for space
+  player.x = 80;
+  player.y = canvas.height / 2 - SPACE_PLAYER_SHIP_H / 2;
+  player.velX = 0;
+  player.velY = 0;
+  player.hp = player.maxHp;
+  player.invincibleTimer = 0;
+  player.hpBarTimer = 0;
+  player.facing = 1;
+  player.aimAngle = 0;
+  player.beamActive = false;
+  player.beamAngle = 0;
+  stopBeamSound();
+  stopEngine();
+
+  camera.x = 0;
+  camera.y = 0;
+
+  // Seed star particles
+  spaceParticles = [];
+  for (let i = 0; i < 80; i++) {
+    spaceParticles.push({
+      x: Math.random() * canvas.width,
+      y: Math.random() * canvas.height,
+      speed: 0.3 + Math.random() * 2.5,
+      size: 0.5 + Math.random() * 2.5,
+      brightness: 0.3 + Math.random() * 0.7,
+    });
+  }
+
+  startSpaceEngine();
+}
+
+// ---- Persistent space engine hum ----
+function startSpaceEngine() {
+  if (spaceEngineNodes) return;
+  if (audioCtx.state === "suspended") audioCtx.resume();
+
+  const osc = audioCtx.createOscillator();
+  const g = audioCtx.createGain();
+  const lp = audioCtx.createBiquadFilter();
+  osc.type = "sawtooth";
+  osc.frequency.value = 42;
+  lp.type = "lowpass"; lp.frequency.value = 120; lp.Q.value = 2;
+  g.gain.value = 0.06;
+  osc.connect(lp).connect(g).connect(audioCtx.destination);
+  osc.start();
+
+  const noise = audioCtx.createBufferSource();
+  noise.buffer = createNoise(2);
+  noise.loop = true;
+  const nLp = audioCtx.createBiquadFilter();
+  nLp.type = "lowpass"; nLp.frequency.value = 100;
+  const nG = audioCtx.createGain();
+  nG.gain.value = 0.03;
+  noise.connect(nLp).connect(nG).connect(audioCtx.destination);
+  noise.start();
+
+  spaceEngineNodes = { osc, noise, g, nG };
+}
+
+function stopSpaceEngine() {
+  if (!spaceEngineNodes) return;
+  try {
+    spaceEngineNodes.osc.stop();
+    spaceEngineNodes.noise.stop();
+  } catch (e) {}
+  spaceEngineNodes = null;
+}
+
+// ---- Space Background ----
+function drawSpaceBackground() {
+  // Dark gradient fallback / base
+  const grad = ctx.createLinearGradient(0, 0, 0, canvas.height);
+  grad.addColorStop(0, "#0a0a1a");
+  grad.addColorStop(0.5, "#0d0d2b");
+  grad.addColorStop(1, "#0a0a1a");
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  // Tiled background image if loaded
+  if (assets.spaceBg.loaded) {
+    const img = assets.spaceBg.img;
+    const scale = canvas.height / img.height;
+    const bgW = img.width * scale;
+    const offset = -(spaceScrollX * 0.3) % bgW;
+    ctx.save();
+    ctx.globalAlpha = 0.5;
+    for (let x = offset - bgW; x < canvas.width; x += bgW) {
+      ctx.drawImage(img, x, 0, bgW, canvas.height);
+    }
+    ctx.restore();
+  }
+
+  // Star field
+  for (const star of spaceParticles) {
+    ctx.save();
+    ctx.globalAlpha = star.brightness;
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(star.x, star.y, star.size, star.size);
+    ctx.restore();
+  }
+}
+
+function updateSpaceStars() {
+  spaceScrollX += SPACE_SCROLL_SPEED;
+  for (const star of spaceParticles) {
+    star.x -= star.speed;
+    if (star.x < -star.size) {
+      star.x = canvas.width + star.size;
+      star.y = Math.random() * canvas.height;
+    }
+  }
+}
+
+// ---- Space Player Movement ----
+function updateSpacePlayer() {
+  if (spaceVictory) return;
+
+  // 4-directional movement with inertia
+  if (keys["ArrowLeft"]) { player.velX -= SPACE_MOVE_SPEED * 0.2; player.facing = -1; }
+  if (keys["ArrowRight"]) { player.velX += SPACE_MOVE_SPEED * 0.2; player.facing = 1; }
+  if (keys["ArrowUp"]) player.velY -= SPACE_MOVE_SPEED * 0.2;
+  if (keys["ArrowDown"]) player.velY += SPACE_MOVE_SPEED * 0.2;
+
+  // Friction / drift
+  player.velX *= SPACE_FRICTION;
+  player.velY *= SPACE_FRICTION;
+
+  // Clamp speed
+  const maxV = SPACE_MOVE_SPEED;
+  player.velX = Math.max(-maxV, Math.min(maxV, player.velX));
+  player.velY = Math.max(-maxV, Math.min(maxV, player.velY));
+
+  player.x += player.velX;
+  player.y += player.velY;
+
+  // Clamp to screen
+  player.x = Math.max(0, Math.min(canvas.width - SPACE_PLAYER_SHIP_W, player.x));
+  player.y = Math.max(0, Math.min(canvas.height - SPACE_PLAYER_SHIP_H, player.y));
+
+  // Invincibility
+  if (player.invincibleTimer > 0) player.invincibleTimer--;
+  if (player.hpBarTimer > 0) player.hpBarTimer--;
+
+  // Shooting
+  if (shootCooldown > 0) shootCooldown--;
+  const shifting = keys["ShiftLeft"] || keys["ShiftRight"];
+  const fireAngle = player.facing === 1 ? player.aimAngle : Math.PI - player.aimAngle;
+
+  if (hasSword && shifting) {
+    player.beamActive = true;
+    player.beamAngle = fireAngle;
+    startBeamSound();
+  } else {
+    if (player.beamActive) stopBeamSound();
+    player.beamActive = false;
+
+    if (shifting && shootCooldown === 0) {
+      const cx = player.x + SPACE_PLAYER_SHIP_W / 2;
+      const cy = player.y + SPACE_PLAYER_SHIP_H / 2;
+      if (corvetteMode) {
+        for (const spread of [-1, 0, 1]) {
+          const sa = fireAngle + spread * 0.15;
+          projectiles.push({
+            x: cx, y: cy,
+            velX: Math.cos(sa) * PROJECTILE_SPEED,
+            velY: Math.sin(sa) * PROJECTILE_SPEED,
+          });
+        }
+      } else {
+        projectiles.push({
+          x: cx, y: cy,
+          velX: Math.cos(fireAngle) * PROJECTILE_SPEED,
+          velY: Math.sin(fireAngle) * PROJECTILE_SPEED,
+        });
+      }
+      shootCooldown = SHOOT_COOLDOWN;
+      playSound(corvetteMode ? "shoot_triple" : "shoot");
+    }
+  }
+}
+
+function drawSpacePlayer() {
+  const sx = player.x, sy = player.y;
+
+  // Invincibility flash
+  if (player.invincibleTimer > 0 && Math.floor(player.invincibleTimer / 4) % 2 === 0) return;
+
+  // Corvette mode in space
+  if (corvetteMode) {
+    const carAsset = (isPoodle && poodleMode && assets.poodleCar.loaded) ? assets.poodleCar : assets.car;
+    if (carAsset.loaded) {
+      ctx.save();
+      if (player.facing === 1) {
+        ctx.translate(sx + SPACE_PLAYER_SHIP_W, sy);
+        ctx.scale(-1, 1);
+        ctx.drawImage(carAsset.img, 0, 0, SPACE_PLAYER_SHIP_W, SPACE_PLAYER_SHIP_H);
+      } else {
+        ctx.drawImage(carAsset.img, sx, sy, SPACE_PLAYER_SHIP_W, SPACE_PLAYER_SHIP_H);
+      }
+      ctx.restore();
+    } else {
+      ctx.fillStyle = "#cc0000";
+      ctx.fillRect(sx, sy, SPACE_PLAYER_SHIP_W, SPACE_PLAYER_SHIP_H);
+    }
+    return;
+  }
+
+  if (assets.spaceShip.loaded) {
+    ctx.save();
+    if (player.facing === -1) {
+      ctx.translate(sx + SPACE_PLAYER_SHIP_W, sy);
+      ctx.scale(-1, 1);
+      ctx.drawImage(assets.spaceShip.img, 0, 0, SPACE_PLAYER_SHIP_W, SPACE_PLAYER_SHIP_H);
+    } else {
+      ctx.drawImage(assets.spaceShip.img, sx, sy, SPACE_PLAYER_SHIP_W, SPACE_PLAYER_SHIP_H);
+    }
+    ctx.restore();
+  } else {
+    // Fallback: blue triangle ship with engine glow
+    ctx.save();
+    // Engine glow
+    ctx.fillStyle = "rgba(0, 150, 255, 0.3)";
+    const glowPulse = 8 + Math.sin(Date.now() / 100) * 3;
+    ctx.fillRect(sx - glowPulse, sy + 8, glowPulse + 4, SPACE_PLAYER_SHIP_H - 16);
+    // Ship body
+    ctx.fillStyle = "#4488ff";
+    ctx.beginPath();
+    if (player.facing === 1) {
+      ctx.moveTo(sx + SPACE_PLAYER_SHIP_W, sy + SPACE_PLAYER_SHIP_H / 2);
+      ctx.lineTo(sx, sy);
+      ctx.lineTo(sx + 10, sy + SPACE_PLAYER_SHIP_H / 2);
+      ctx.lineTo(sx, sy + SPACE_PLAYER_SHIP_H);
+    } else {
+      ctx.moveTo(sx, sy + SPACE_PLAYER_SHIP_H / 2);
+      ctx.lineTo(sx + SPACE_PLAYER_SHIP_W, sy);
+      ctx.lineTo(sx + SPACE_PLAYER_SHIP_W - 10, sy + SPACE_PLAYER_SHIP_H / 2);
+      ctx.lineTo(sx + SPACE_PLAYER_SHIP_W, sy + SPACE_PLAYER_SHIP_H);
+    }
+    ctx.closePath();
+    ctx.fill();
+    // Cockpit
+    ctx.fillStyle = "#88ccff";
+    const cockpitX = player.facing === 1 ? sx + SPACE_PLAYER_SHIP_W - 25 : sx + 10;
+    ctx.fillRect(cockpitX, sy + SPACE_PLAYER_SHIP_H / 2 - 6, 15, 12);
+    ctx.restore();
+  }
+
+  // Draw sword glow if equipped
+  if (hasSword) {
+    ctx.save();
+    ctx.globalAlpha = 0.4 + Math.sin(Date.now() / 200) * 0.2;
+    ctx.fillStyle = "#fbbf24";
+    ctx.fillRect(sx - 2, sy - 2, SPACE_PLAYER_SHIP_W + 4, SPACE_PLAYER_SHIP_H + 4);
+    ctx.globalAlpha = 1;
+    ctx.restore();
+  }
+}
+
+// ---- Space Projectiles (player) ----
+function updateSpaceProjectiles() {
+  for (let i = projectiles.length - 1; i >= 0; i--) {
+    const p = projectiles[i];
+    p.x += p.velX;
+    p.y += p.velY;
+    // Remove off-screen
+    if (p.x < -20 || p.x > canvas.width + 20 || p.y < -20 || p.y > canvas.height + 20) {
+      projectiles.splice(i, 1);
+      continue;
+    }
+    // Check vs space enemies
+    for (let e = spaceEnemies.length - 1; e >= 0; e--) {
+      const en = spaceEnemies[e];
+      if (p.x > en.x && p.x < en.x + en.width && p.y > en.y && p.y < en.y + en.height) {
+        en.hp--;
+        if (en.hp <= 0) {
+          spawnDeathExplosion(en, 2, 2, "spaceEnemy");
+          spaceEnemies.splice(e, 1);
+          playSound("enemy_death");
+        } else {
+          playSound("enemy_hit");
+        }
+        projectiles.splice(i, 1);
+        break;
+      }
+    }
+  }
+  // Check vs space boss
+  if (spaceBoss && spaceBoss.alive) {
+    for (let i = projectiles.length - 1; i >= 0; i--) {
+      const p = projectiles[i];
+      if (spaceBoss.invincibleTimer > 0) continue;
+      if (p.x > spaceBoss.x && p.x < spaceBoss.x + spaceBoss.width &&
+          p.y > spaceBoss.y && p.y < spaceBoss.y + spaceBoss.height) {
+        spaceBoss.hp--;
+        spaceBoss.invincibleTimer = 15;
+        const destroyed = pickRandomChunks(spaceBoss, 1, 16);
+        spawnChunkDebris(spaceBoss, destroyed, 4, 4, "spaceBattlecruiser");
+        if (spaceBoss.hp <= 0) {
+          spawnDeathExplosion(spaceBoss, 4, 4, "spaceBattlecruiser");
+          spaceBoss.alive = false;
+          spaceVictory = true;
+          playSound("boss_death");
+        } else {
+          playSound("boss_hit");
+        }
+        projectiles.splice(i, 1);
+        break;
+      }
+    }
+  }
+}
+
+function drawSpaceProjectiles() {
+  for (const p of projectiles) {
+    ctx.save();
+    ctx.fillStyle = corvetteMode ? "#ff4444" : "#ffdd44";
+    ctx.shadowColor = corvetteMode ? "#ff0000" : "#ffaa00";
+    ctx.shadowBlur = 6;
+    ctx.fillRect(p.x - 4, p.y - 2, 8, 4);
+    ctx.restore();
+  }
+}
+
+// ---- Space Beam ----
+function updateSpaceBeam() {
+  if (!player.beamActive) { beamDamageTimer = 0; return; }
+  beamDamageTimer++;
+  if (beamDamageTimer < BEAM_DAMAGE_INTERVAL) return;
+  beamDamageTimer = 0;
+
+  const cx = player.x + SPACE_PLAYER_SHIP_W / 2;
+  const cy = player.y + SPACE_PLAYER_SHIP_H / 2;
+  const cos = Math.cos(player.beamAngle);
+  const sin = Math.sin(player.beamAngle);
+
+  // Check space enemies
+  for (let e = spaceEnemies.length - 1; e >= 0; e--) {
+    const en = spaceEnemies[e];
+    if (beamHitsRect(cx, cy, cos, sin, BEAM_LENGTH, BEAM_WIDTH, en)) {
+      en.hp--;
+      if (en.hp <= 0) {
+        spawnDeathExplosion(en, 2, 2, "spaceEnemy");
+        spaceEnemies.splice(e, 1);
+        playSound("enemy_death");
+      } else {
+        playSound("enemy_hit");
+      }
+    }
+  }
+
+  // Check space boss
+  if (spaceBoss && spaceBoss.alive && spaceBoss.invincibleTimer === 0) {
+    if (beamHitsRect(cx, cy, cos, sin, BEAM_LENGTH, BEAM_WIDTH, spaceBoss)) {
+      spaceBoss.hp--;
+      spaceBoss.invincibleTimer = 30;
+      const destroyed = pickRandomChunks(spaceBoss, 1, 16);
+      spawnChunkDebris(spaceBoss, destroyed, 4, 4, "spaceBattlecruiser");
+      if (spaceBoss.hp <= 0) {
+        spawnDeathExplosion(spaceBoss, 4, 4, "spaceBattlecruiser");
+        spaceBoss.alive = false;
+        spaceVictory = true;
+        playSound("boss_death");
+      } else {
+        playSound("boss_hit");
+      }
+    }
+  }
+}
+
+function drawSpaceBeam() {
+  if (!player.beamActive) return;
+  const cx = player.x + SPACE_PLAYER_SHIP_W / 2;
+  const cy = player.y + SPACE_PLAYER_SHIP_H / 2;
+  const angle = player.beamAngle;
+  const pulse = 0.7 + Math.sin(Date.now() / 80) * 0.3;
+
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.rotate(angle);
+  ctx.globalAlpha = 0.25 * pulse;
+  ctx.fillStyle = "#fbbf24";
+  ctx.fillRect(0, -BEAM_WIDTH, BEAM_LENGTH, BEAM_WIDTH * 2);
+  ctx.globalAlpha = 0.7 * pulse;
+  ctx.fillStyle = "#f59e0b";
+  ctx.fillRect(0, -BEAM_WIDTH / 2, BEAM_LENGTH, BEAM_WIDTH);
+  ctx.globalAlpha = 0.9;
+  ctx.fillStyle = "#fef3c7";
+  ctx.fillRect(0, -BEAM_WIDTH / 4, BEAM_LENGTH, BEAM_WIDTH / 2);
+  ctx.restore();
+}
+
+// ---- Enemy Wave System ----
+
+const SPACE_WAVE_DEFS = [
+  // Wave format: { count, type, delay }
+  { count: 3, type: "basic", delay: 20 },
+  { count: 4, type: "basic", delay: 15 },
+  { count: 3, type: "sine", delay: 18 },
+  { count: 2, type: "basic", delay: 10, extra: { count: 2, type: "sine", delay: 15 } },
+  { count: 4, type: "sine", delay: 12 },
+  { count: 3, type: "diagonal", delay: 15 },
+  { count: 5, type: "basic", delay: 10 },
+  { count: 3, type: "swooper", delay: 20 },
+  { count: 2, type: "diagonal", delay: 12, extra: { count: 2, type: "swooper", delay: 15 } },
+  { count: 4, type: "swooper", delay: 12 },
+];
+
+function spawnSpaceWave() {
+  const waveIdx = spaceWaveIndex % SPACE_WAVE_DEFS.length;
+  const wave = SPACE_WAVE_DEFS[waveIdx];
+  const difficulty = 1 + Math.floor(spaceWaveIndex / SPACE_WAVE_DEFS.length);
+
+  function makeEnemy(type, i, delay) {
+    const baseHp = type === "basic" ? 1 : type === "sine" ? 2 : type === "diagonal" ? 2 : 3;
+    const baseSpd = type === "basic" ? 2 : type === "sine" ? 1.5 : type === "diagonal" ? 2.5 : 1.8;
+    const w = type === "swooper" ? 50 : 40;
+    const h = type === "swooper" ? 36 : 30;
+    spaceEnemies.push({
+      x: canvas.width + 20 + i * 60 * delay / 10,
+      y: 40 + Math.random() * (canvas.height - 80 - h),
+      width: w, height: h,
+      type: type,
+      hp: baseHp + Math.floor(difficulty / 2),
+      maxHp: baseHp + Math.floor(difficulty / 2),
+      speed: baseSpd + difficulty * 0.2,
+      color: type === "basic" ? "#cc3333" : type === "sine" ? "#33cc33" : type === "diagonal" ? "#cc9933" : "#cc33cc",
+      direction: -1,
+      shootTimer: 60 + Math.floor(Math.random() * 60),
+      sineOffset: Math.random() * Math.PI * 2,
+      sineAmp: 40 + Math.random() * 40,
+      startY: 40 + Math.random() * (canvas.height - 80 - h),
+      swoopPhase: 0,
+      diagDirY: Math.random() > 0.5 ? 1 : -1,
+      destroyedChunks: [],
+    });
+  }
+
+  for (let i = 0; i < wave.count; i++) makeEnemy(wave.type, i, wave.delay);
+  if (wave.extra) {
+    for (let i = 0; i < wave.extra.count; i++) makeEnemy(wave.extra.type, i + wave.count, wave.extra.delay);
+  }
+}
+
+function updateSpaceEnemies() {
+  if (spaceVictory) return;
+
+  // Wave spawning
+  if (!spaceBossActive) {
+    spaceDistance += SPACE_SCROLL_SPEED * 2;
+    spaceWaveTimer--;
+    if (spaceWaveTimer <= 0 && spaceDistance < SPACE_BOSS_THRESHOLD) {
+      spawnSpaceWave();
+      spaceWaveIndex++;
+      spaceWaveTimer = 120 + Math.floor(Math.random() * 80);
+    }
+    // Boss trigger
+    if (spaceDistance >= SPACE_BOSS_THRESHOLD && spaceEnemies.length === 0) {
+      spawnSpaceBoss();
+    }
+  }
+
+  // Update enemies
+  for (let i = spaceEnemies.length - 1; i >= 0; i--) {
+    const en = spaceEnemies[i];
+
+    if (en.type === "basic") {
+      en.x -= en.speed;
+    } else if (en.type === "sine") {
+      en.x -= en.speed;
+      en.sineOffset += 0.04;
+      en.y = en.startY + Math.sin(en.sineOffset) * en.sineAmp;
+    } else if (en.type === "diagonal") {
+      en.x -= en.speed;
+      en.y += en.diagDirY * en.speed * 0.6;
+      if (en.y < 10 || en.y > canvas.height - en.height - 10) en.diagDirY *= -1;
+    } else if (en.type === "swooper") {
+      en.swoopPhase += 0.02;
+      if (en.swoopPhase < 1) {
+        en.x -= en.speed * 1.5;
+      } else if (en.swoopPhase < 3) {
+        // Hover and shoot
+        en.x += Math.sin(en.swoopPhase * 2) * 0.5;
+        en.y += Math.sin(en.swoopPhase * 3) * 0.8;
+      } else {
+        en.x -= en.speed * 2;
+      }
+    }
+
+    // Shoot at player
+    en.shootTimer--;
+    if (en.shootTimer <= 0) {
+      const dx = player.x - en.x;
+      const dy = player.y - en.y;
+      const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+      spaceEnemyProjectiles.push({
+        x: en.x, y: en.y + en.height / 2,
+        velX: (dx / dist) * 3.5,
+        velY: (dy / dist) * 3.5,
+        size: 5,
+      });
+      en.shootTimer = 80 + Math.floor(Math.random() * 60);
+      playSound("missile_launch");
+    }
+
+    // Remove off-screen
+    if (en.x < -80) { spaceEnemies.splice(i, 1); continue; }
+
+    // Collision with player
+    if (player.invincibleTimer === 0 &&
+        en.x < player.x + SPACE_PLAYER_SHIP_W && en.x + en.width > player.x &&
+        en.y < player.y + SPACE_PLAYER_SHIP_H && en.y + en.height > player.y) {
+      damagePlayer(1);
+    }
+  }
+}
+
+function drawSpaceEnemies() {
+  for (const en of spaceEnemies) {
+    if (assets.spaceEnemy.loaded) {
+      ctx.save();
+      ctx.drawImage(assets.spaceEnemy.img, en.x, en.y, en.width, en.height);
+      ctx.restore();
+    } else {
+      // Fallback: colored diamond shape
+      ctx.save();
+      ctx.fillStyle = en.color;
+      ctx.beginPath();
+      ctx.moveTo(en.x, en.y + en.height / 2);
+      ctx.lineTo(en.x + en.width / 2, en.y);
+      ctx.lineTo(en.x + en.width, en.y + en.height / 2);
+      ctx.lineTo(en.x + en.width / 2, en.y + en.height);
+      ctx.closePath();
+      ctx.fill();
+      // Cockpit
+      ctx.fillStyle = "#ffcc44";
+      ctx.fillRect(en.x + en.width / 2 - 4, en.y + en.height / 2 - 4, 8, 8);
+      ctx.restore();
+    }
+
+    // HP bar for enemies with > 1 HP
+    if (en.hp < en.maxHp && en.hp > 0) {
+      const bw = en.width;
+      ctx.fillStyle = "#333";
+      ctx.fillRect(en.x, en.y - 6, bw, 3);
+      ctx.fillStyle = "#22c55e";
+      ctx.fillRect(en.x, en.y - 6, bw * (en.hp / en.maxHp), 3);
+    }
+  }
+}
+
+// ---- Enemy Projectiles ----
+function updateSpaceEnemyProjectiles() {
+  for (let i = spaceEnemyProjectiles.length - 1; i >= 0; i--) {
+    const p = spaceEnemyProjectiles[i];
+    p.x += p.velX;
+    p.y += p.velY;
+
+    if (p.x < -20 || p.x > canvas.width + 20 || p.y < -20 || p.y > canvas.height + 20) {
+      spaceEnemyProjectiles.splice(i, 1);
+      continue;
+    }
+
+    // Hit player
+    if (player.invincibleTimer === 0 &&
+        p.x > player.x && p.x < player.x + SPACE_PLAYER_SHIP_W &&
+        p.y > player.y && p.y < player.y + SPACE_PLAYER_SHIP_H) {
+      damagePlayer(1);
+      spaceEnemyProjectiles.splice(i, 1);
+    }
+  }
+}
+
+function drawSpaceEnemyProjectiles() {
+  for (const p of spaceEnemyProjectiles) {
+    ctx.save();
+    ctx.fillStyle = "#ff4466";
+    ctx.shadowColor = "#ff0044";
+    ctx.shadowBlur = 5;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, p.size / 2, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+}
+
+// ---- Space Boss (Battlecruiser) ----
+function spawnSpaceBoss() {
+  spaceBossActive = true;
+  playSound("boss_enter");
+  spaceBoss = {
+    x: canvas.width + 20,
+    y: canvas.height / 2 - 60,
+    width: 200, height: 120,
+    hp: 30, maxHp: 30,
+    speed: 0.8,
+    alive: true,
+    invincibleTimer: 0,
+    direction: 1,
+    color: "#6b21a8",
+    patrolDir: 1,
+    attackTimer: 90,
+    attackType: 0,
+    entryTimer: 120,
+    destroyedChunks: [],
+  };
+  spaceBossProjectiles = [];
+}
+
+function updateSpaceBoss() {
+  if (!spaceBoss || !spaceBoss.alive) return;
+
+  if (spaceBoss.invincibleTimer > 0) spaceBoss.invincibleTimer--;
+
+  // Entry slide
+  if (spaceBoss.entryTimer > 0) {
+    spaceBoss.entryTimer--;
+    const targetX = canvas.width - spaceBoss.width - 30;
+    spaceBoss.x += (targetX - spaceBoss.x) * 0.04;
+    return;
+  }
+
+  // Phase based on HP ratio
+  const hpRatio = spaceBoss.hp / spaceBoss.maxHp;
+  const phase = hpRatio > 0.66 ? 1 : hpRatio > 0.33 ? 2 : 3;
+  const patrolSpeed = 1 + (phase - 1) * 0.5;
+
+  // Vertical patrol
+  spaceBoss.y += spaceBoss.patrolDir * patrolSpeed;
+  if (spaceBoss.y < 20) { spaceBoss.patrolDir = 1; }
+  if (spaceBoss.y > canvas.height - spaceBoss.height - 20) { spaceBoss.patrolDir = -1; }
+
+  // Horizontal wobble in later phases
+  if (phase >= 2) {
+    spaceBoss.x += Math.sin(Date.now() / 1000) * (phase === 3 ? 1.2 : 0.6);
+    spaceBoss.x = Math.max(canvas.width - spaceBoss.width - 80, Math.min(canvas.width - 30, spaceBoss.x));
+  }
+
+  // Attacks
+  spaceBoss.attackTimer--;
+  if (spaceBoss.attackTimer <= 0) {
+    const attacks = phase === 1 ? ["aimed", "missile"] :
+                    phase === 2 ? ["aimed", "missile", "spread"] :
+                    ["aimed", "missile", "spread", "aimed"];
+    const atk = attacks[spaceBoss.attackType % attacks.length];
+    spaceBoss.attackType++;
+
+    if (atk === "aimed") {
+      // Single aimed laser
+      const dx = player.x - spaceBoss.x;
+      const dy = (player.y + SPACE_PLAYER_SHIP_H / 2) - (spaceBoss.y + spaceBoss.height / 2);
+      const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+      spaceBossProjectiles.push({
+        x: spaceBoss.x, y: spaceBoss.y + spaceBoss.height / 2,
+        velX: (dx / dist) * (4 + phase),
+        velY: (dy / dist) * (4 + phase),
+        size: 6, type: "laser", life: 300,
+      });
+      playSound("shoot");
+    }
+    else if (atk === "missile") {
+      // Homing missiles
+      const count = 1 + phase;
+      for (let m = 0; m < count; m++) {
+        spaceBossProjectiles.push({
+          x: spaceBoss.x, y: spaceBoss.y + 20 + m * 40,
+          velX: -2, velY: (Math.random() - 0.5) * 2,
+          size: 8, type: "missile", life: 240,
+        });
+      }
+      playSound("missile_launch");
+    }
+    else if (atk === "spread") {
+      // Fan of bullets
+      const count = 5 + (phase - 2) * 2;
+      const arcSpan = Math.PI * 0.6;
+      const baseAngle = Math.PI + (Math.PI - arcSpan) / 2;
+      for (let s = 0; s < count; s++) {
+        const a = baseAngle - arcSpan / 2 + (arcSpan / (count - 1)) * s;
+        spaceBossProjectiles.push({
+          x: spaceBoss.x, y: spaceBoss.y + spaceBoss.height / 2,
+          velX: Math.cos(a) * 4,
+          velY: Math.sin(a) * 4,
+          size: 5, type: "laser", life: 200,
+        });
+      }
+      playSound("shoot");
+    }
+
+    spaceBoss.attackTimer = Math.max(30, 80 - phase * 15);
+  }
+}
+
+function updateSpaceBossProjectiles() {
+  for (let i = spaceBossProjectiles.length - 1; i >= 0; i--) {
+    const p = spaceBossProjectiles[i];
+    p.life--;
+    if (p.life <= 0) { spaceBossProjectiles.splice(i, 1); continue; }
+
+    if (p.type === "missile") {
+      // Homing: gently steer toward player
+      const dx = player.x + SPACE_PLAYER_SHIP_W / 2 - p.x;
+      const dy = player.y + SPACE_PLAYER_SHIP_H / 2 - p.y;
+      const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+      p.velX += (dx / dist) * 0.15;
+      p.velY += (dy / dist) * 0.15;
+      const spd = Math.sqrt(p.velX * p.velX + p.velY * p.velY);
+      if (spd > 4) { p.velX = (p.velX / spd) * 4; p.velY = (p.velY / spd) * 4; }
+    }
+
+    p.x += p.velX;
+    p.y += p.velY;
+
+    if (p.x < -30 || p.x > canvas.width + 30 || p.y < -30 || p.y > canvas.height + 30) {
+      spaceBossProjectiles.splice(i, 1);
+      continue;
+    }
+
+    // Hit player
+    if (player.invincibleTimer === 0 &&
+        p.x - p.size < player.x + SPACE_PLAYER_SHIP_W && p.x + p.size > player.x &&
+        p.y - p.size < player.y + SPACE_PLAYER_SHIP_H && p.y + p.size > player.y) {
+      damagePlayer(1);
+      spaceBossProjectiles.splice(i, 1);
+    }
+  }
+}
+
+function drawSpaceBoss() {
+  if (!spaceBoss || !spaceBoss.alive) return;
+
+  // Flash on hit
+  const flash = spaceBoss.invincibleTimer > 0 && Math.floor(spaceBoss.invincibleTimer / 3) % 2 === 0;
+
+  if (assets.spaceBattlecruiser.loaded && !flash) {
+    ctx.drawImage(assets.spaceBattlecruiser.img, spaceBoss.x, spaceBoss.y, spaceBoss.width, spaceBoss.height);
+  } else {
+    // Fallback: large purple/grey warship shape
+    ctx.save();
+    ctx.fillStyle = flash ? "#ffffff" : "#6b21a8";
+    ctx.beginPath();
+    ctx.moveTo(spaceBoss.x, spaceBoss.y + spaceBoss.height / 2);
+    ctx.lineTo(spaceBoss.x + spaceBoss.width * 0.3, spaceBoss.y);
+    ctx.lineTo(spaceBoss.x + spaceBoss.width, spaceBoss.y + 15);
+    ctx.lineTo(spaceBoss.x + spaceBoss.width, spaceBoss.y + spaceBoss.height - 15);
+    ctx.lineTo(spaceBoss.x + spaceBoss.width * 0.3, spaceBoss.y + spaceBoss.height);
+    ctx.closePath();
+    ctx.fill();
+    // Bridge
+    ctx.fillStyle = flash ? "#ffffff" : "#a855f7";
+    ctx.fillRect(spaceBoss.x + spaceBoss.width * 0.5, spaceBoss.y + spaceBoss.height * 0.3,
+                 spaceBoss.width * 0.3, spaceBoss.height * 0.4);
+    // Engine glow
+    ctx.fillStyle = "rgba(168, 85, 247, 0.5)";
+    ctx.fillRect(spaceBoss.x + spaceBoss.width - 5, spaceBoss.y + 20,
+                 10 + Math.sin(Date.now() / 100) * 5, spaceBoss.height - 40);
+    ctx.restore();
+  }
+}
+
+function drawSpaceBossProjectiles() {
+  for (const p of spaceBossProjectiles) {
+    ctx.save();
+    if (p.type === "missile") {
+      ctx.fillStyle = "#ff8844";
+      ctx.shadowColor = "#ff4400";
+      ctx.shadowBlur = 6;
+      ctx.fillRect(p.x - p.size / 2, p.y - p.size / 4, p.size, p.size / 2);
+    } else {
+      ctx.fillStyle = "#ff44ff";
+      ctx.shadowColor = "#ff00ff";
+      ctx.shadowBlur = 5;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.size / 2, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+}
+
+// ---- Space HUD ----
+function drawSpaceHUD() {
+  // Hull bar (top-left)
+  ctx.fillStyle = "rgba(0, 0, 0, 0.5)";
+  ctx.fillRect(8, 8, 200, 28);
+  ctx.fillStyle = "white";
+  ctx.font = "bold 12px monospace";
+  ctx.fillText("HULL", 14, 24);
+  const hullW = 140;
+  ctx.fillStyle = "#333";
+  ctx.fillRect(52, 14, hullW, 14);
+  const hullFill = (player.hp / player.maxHp) * hullW;
+  ctx.fillStyle = player.hp <= player.maxHp * 0.25 ? "#dc2626" :
+                  player.hp <= player.maxHp * 0.5 ? "#f59e0b" : "#22c55e";
+  ctx.fillRect(52, 14, hullFill, 14);
+  ctx.strokeStyle = "#555";
+  ctx.strokeRect(52, 14, hullW, 14);
+
+  // Distance / Boss HP bar (top-center)
+  const barCX = canvas.width / 2;
+  if (spaceBossActive && spaceBoss && spaceBoss.alive) {
+    // Boss HP bar
+    ctx.fillStyle = "rgba(0, 0, 0, 0.5)";
+    ctx.fillRect(barCX - 120, 8, 240, 28);
+    ctx.fillStyle = "#ff4444";
+    ctx.font = "bold 12px monospace";
+    ctx.textAlign = "center";
+    ctx.fillText("BATTLECRUISER", barCX, 20);
+    const bossBarW = 200;
+    ctx.fillStyle = "#333";
+    ctx.fillRect(barCX - bossBarW / 2, 22, bossBarW, 8);
+    ctx.fillStyle = "#dc2626";
+    ctx.fillRect(barCX - bossBarW / 2, 22, bossBarW * (spaceBoss.hp / spaceBoss.maxHp), 8);
+    ctx.textAlign = "left";
+  } else {
+    // Distance bar
+    ctx.fillStyle = "rgba(0, 0, 0, 0.5)";
+    ctx.fillRect(barCX - 100, 8, 200, 28);
+    ctx.fillStyle = "white";
+    ctx.font = "bold 12px monospace";
+    ctx.textAlign = "center";
+    ctx.fillText("DISTANCE", barCX, 20);
+    const distW = 160;
+    ctx.fillStyle = "#333";
+    ctx.fillRect(barCX - distW / 2, 22, distW, 8);
+    ctx.fillStyle = "#4488ff";
+    ctx.fillRect(barCX - distW / 2, 22, distW * Math.min(spaceDistance / SPACE_BOSS_THRESHOLD, 1), 8);
+    ctx.textAlign = "left";
+  }
+
+  // Level indicator (top-right)
+  ctx.fillStyle = "rgba(0, 0, 0, 0.4)";
+  ctx.fillRect(canvas.width - 100, 8, 92, 28);
+  ctx.fillStyle = "#88bbff";
+  ctx.font = "bold 14px monospace";
+  ctx.textAlign = "right";
+  ctx.fillText("Space", canvas.width - 16, 27);
+  ctx.textAlign = "left";
+
+  // DO NOT PRESS button
+  if (corvetteMode) {
+    ctx.fillStyle = "rgba(0, 100, 0, 0.7)";
+    ctx.fillRect(8, 42, 120, 24);
+    ctx.fillStyle = "#66ff66";
+    ctx.font = "bold 11px monospace";
+    ctx.fillText("ACTIVATED", 16, 58);
+  } else {
+    ctx.fillStyle = "rgba(100, 0, 0, 0.7)";
+    ctx.fillRect(8, 42, 120, 24);
+    ctx.fillStyle = "#ffcccc";
+    ctx.font = "bold 11px monospace";
+    ctx.fillText("DO NOT PRESS", 14, 58);
+  }
+
+  // Victory overlay
+  if (spaceVictory) {
+    ctx.fillStyle = "rgba(0, 0, 0, 0.6)";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = "#fbbf24";
+    ctx.font = "bold 40px monospace";
+    ctx.textAlign = "center";
+    ctx.fillText("Victory!", canvas.width / 2, canvas.height / 2 - 20);
+    ctx.fillStyle = "white";
+    ctx.font = "20px monospace";
+    ctx.fillText("Press R to Restart", canvas.width / 2, canvas.height / 2 + 30);
+    ctx.textAlign = "left";
+  }
+
+  // Death message
+  if (deathTimer > 0) {
+    deathTimer--;
+    ctx.fillStyle = "rgba(0, 0, 0, 0.5)";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = "#ff6b6b";
+    ctx.font = "bold 28px monospace";
+    ctx.textAlign = "center";
+    ctx.fillText(deathMessage, canvas.width / 2, canvas.height / 2);
+    ctx.textAlign = "left";
+  }
+}
+
+// ---- Main Space Update / Draw ----
+function updateSpaceLevel() {
+  if (spaceVictory) return;
+  updateSpaceStars();
+  updateSpacePlayer();
+  updateSpaceProjectiles();
+  updateSpaceBeam();
+  updateSpaceEnemies();
+  updateSpaceEnemyProjectiles();
+  updateSpaceBoss();
+  updateSpaceBossProjectiles();
+  updateDeathEffects();
+}
+
+function drawSpaceLevel() {
+  drawSpaceBackground();
+  drawSpaceEnemies();
+  drawSpaceBoss();
+  drawSpaceBossProjectiles();
+  drawSpaceEnemyProjectiles();
+  drawSpaceProjectiles();
+  drawSpaceBeam();
+  drawSpacePlayer();
+  // Death effects with no camera offset
+  drawDeathEffects();
+  drawSpaceHUD();
+}
+
+// =============================================================================
 // RESTART (R key for victory screen)
 // =============================================================================
 
 window.addEventListener("keydown", (e) => {
-  if (e.code === "KeyR" && victoryScreen) {
+  if (e.code === "KeyR" && (victoryScreen || spaceVictory)) {
     hasSword = false;
     isPoodle = false;
     poodleMode = false;
     secretLevelState = null;
+    spaceMode = false;
+    spaceVictory = false;
+    cutsceneState = null;
+    spaceBossActive = false;
+    spaceBoss = null;
+    spaceEnemies = [];
+    spaceEnemyProjectiles = [];
+    spaceBossProjectiles = [];
+    stopSpaceEngine();
     loadLevel(0);
   }
 });
@@ -3655,40 +4996,66 @@ canvas.addEventListener("click", (e) => {
 
 function gameLoop() {
   // 1. Update game state
-  updateTransition();
-
-  if (transitionTimer === 0 && !victoryScreen) {
-    player.update();
-    handlePlatformCollisions();
-    updateEnemies();
-    updateBoss();
-    updateBossProjectiles();
-    updateProjectiles();
-    updateBeam();
+  if (cutsceneState) {
+    updateCutscene();
     updateDeathEffects();
-    updatePortal();
-    if (currentLevel === 0) updateSecretDoor();
-    if (currentLevel === 2) updateSecretLevel();
+    // Let player move during descend/idle phases so they can walk to ship
+    if (cutsceneState && (cutsceneState.phase === "ship_descend" || cutsceneState.phase === "ship_idle")) {
+      player.update();
+      handlePlatformCollisions();
+    }
+  } else if (spaceMode) {
+    updateSpaceLevel();
+  } else {
+    updateTransition();
+    if (transitionTimer === 0 && !victoryScreen) {
+      player.update();
+      handlePlatformCollisions();
+      updateEnemies();
+      updateBoss();
+      updateBossProjectiles();
+      updateProjectiles();
+      updateBeam();
+      updateDeathEffects();
+      updatePortal();
+      if (currentLevel === 0) updateSecretDoor();
+      if (currentLevel === 2) updateSecretLevel();
+    }
   }
 
-  camera.follow(player);
-
-  // 2. Draw everything (order matters: back to front)
-  drawBackground();
-  drawDecorations();
-  drawPlatforms();
-  drawPortal();
-  if (currentLevel === 0) drawSecretDoor();
-  drawEnemies();
-  drawBoss();
-  drawBossProjectiles();
-  drawProjectiles();
-  drawBeam();
-  drawDeathEffects();
-  player.draw();
-  if (currentLevel === 2) drawSecretLevel();
-  drawHUD();
-  drawTransition();
+  // 2. Draw
+  if (cutsceneState) {
+    // Draw platformer scene underneath cutscene
+    camera.follow(player);
+    drawBackground();
+    drawDecorations();
+    drawPlatforms();
+    drawPortal();
+    drawEnemies();
+    drawBoss();
+    drawDeathEffects();
+    player.draw();
+    drawCutscene();
+  } else if (spaceMode) {
+    drawSpaceLevel();
+  } else {
+    camera.follow(player);
+    drawBackground();
+    drawDecorations();
+    drawPlatforms();
+    drawPortal();
+    if (currentLevel === 0) drawSecretDoor();
+    drawEnemies();
+    drawBoss();
+    drawBossProjectiles();
+    drawProjectiles();
+    drawBeam();
+    drawDeathEffects();
+    player.draw();
+    if (currentLevel === 2) drawSecretLevel();
+    drawHUD();
+    drawTransition();
+  }
 
   // 3. Request the next frame
   requestAnimationFrame(gameLoop);

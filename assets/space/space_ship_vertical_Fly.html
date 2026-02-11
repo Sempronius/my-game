@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Sprite Animation</title>
+<style>
+body { background:#1a1a2e; display:flex; align-items:center; justify-content:center; min-height:100vh; margin:0; flex-direction:column; gap:20px; }
+canvas { image-rendering:pixelated; image-rendering:crisp-edges; border:2px solid #ffd700; }
+.controls { display:flex; gap:10px; }
+button { background:#ffd700; color:#1a1a2e; border:none; padding:8px 16px; border-radius:4px; cursor:pointer; font-weight:bold; }
+</style>
+</head>
+<body>
+<canvas id="anim" width="192" height="192"></canvas>
+<div class="controls">
+<button onclick="playing=!playing;this.textContent=playing?'Pause':'Play'">Pause</button>
+</div>
+<script>
+const img=new Image();
+img.src="data:image/png;base64,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";
+const c=document.getElementById('anim'),ctx=c.getContext('2d');
+const FW=48,FH=48,FRAMES=4;
+let frame=0,playing=true;
+img.onload=()=>{setInterval(()=>{if(!playing)return;ctx.clearRect(0,0,c.width,c.height);ctx.imageSmoothingEnabled=false;ctx.drawImage(img,frame*FW,0,FW,FH,0,0,FW*4,FH*4);frame=(frame+1)%FRAMES;},150);};
+</script>
+</body>
+</html>
