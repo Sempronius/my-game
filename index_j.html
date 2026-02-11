@@ -100,6 +100,16 @@ const assets = {
   spaceEnemy:      { img: new Image(), loaded: false },
   spaceBattlecruiser: { img: new Image(), loaded: false },
   spaceBg:         { img: new Image(), loaded: false },
+  spacePlayerShip: { img: new Image(), loaded: false },
+  spaceEnemyBasic: { img: new Image(), loaded: false },
+  spaceEnemySine:  { img: new Image(), loaded: false },
+  spaceEnemyDiagonal: { img: new Image(), loaded: false },
+  spaceEnemySwooper:  { img: new Image(), loaded: false },
+  spaceNebula:     { img: new Image(), loaded: false },
+  debrisLarge:     { img: new Image(), loaded: false },
+  debrisMed:       { img: new Image(), loaded: false },
+  debrisSmall:     { img: new Image(), loaded: false },
+  debrisBrown:     { img: new Image(), loaded: false },
 };
 
 /** Returns a Promise that resolves once an image loads (or fails gracefully) */
@@ -120,19 +130,16 @@ async function loadAnimFrames(asset, baseSrc) {
   if (!asset.loaded) return;
   const prefix = baseSrc.replace(".png", "");
   const bust = "?t=" + Date.now();
-  // Load all numbered frames 1-200, skipping gaps (files may be non-sequential)
-  const probes = [];
-  for (let n = 1; n <= 200; n++) {
+  // Load sequential frames — stop at first missing file
+  for (let n = 1; n <= 50; n++) {
     const img = new Image();
-    probes.push(new Promise((resolve) => {
-      img.onload = () => resolve(img);
-      img.onerror = () => resolve(null);
+    const ok = await new Promise((resolve) => {
+      img.onload = () => resolve(true);
+      img.onerror = () => resolve(false);
       img.src = prefix + n + ".png" + bust;
-    }));
-  }
-  const results = await Promise.all(probes);
-  for (const img of results) {
-    if (img) asset.frames.push(img);
+    });
+    if (ok) asset.frames.push(img);
+    else break;
   }
 }
 
@@ -315,6 +322,16 @@ async function loadAllAssets() {
     loadImage(assets.spaceEnemy,      "assets/space/enemy_ship_j.png"),
     loadImage(assets.spaceBattlecruiser, "assets/space/battlecruiser_j.png"),
     loadImage(assets.spaceBg,         "assets/space/space_bg_j.png"),
+    loadImage(assets.spacePlayerShip, "assets/space/space_player_j.png"),
+    loadImage(assets.spaceEnemyBasic, "assets/space/enemy_basic_j.png"),
+    loadImage(assets.spaceEnemySine,  "assets/space/enemy_sine_j.png"),
+    loadImage(assets.spaceEnemyDiagonal, "assets/space/enemy_diagonal_j.png"),
+    loadImage(assets.spaceEnemySwooper,  "assets/space/enemy_swooper_j.png"),
+    loadImage(assets.spaceNebula,     "assets/space/space_nebula_j.png"),
+    loadImage(assets.debrisLarge,     "assets/space/debris_large_j.png"),
+    loadImage(assets.debrisMed,       "assets/space/debris_med_j.png"),
+    loadImage(assets.debrisSmall,     "assets/space/debris_small_j.png"),
+    loadImage(assets.debrisBrown,     "assets/space/debris_brown_j.png"),
   ]);
 
   // Load animation frames (numbered variants like player_j1.png, player_j2.png, ...)
@@ -414,6 +431,7 @@ const player = {
     this.velX = 0;
     this.velY = 0;
     this.onGround = false;
+    this.maxHp = 12;
     this.hp = this.maxHp;
     this.invincibleTimer = 0;
     this.hpBarTimer = 0;
@@ -909,8 +927,23 @@ let spaceBoss = null;
 let spaceBossActive = false;
 let spaceBossProjectiles = [];
 let spaceParticles = [];
+let spaceStarsFar = [];
+let spaceDebrisObjects = [];
 let spaceVictory = false;
 let spaceEngineNodes = null;
+let spacePowerups = [];
+let spaceWeaponLevel = 0;  // 0=default, 1-6=upgrades
+
+// Weapon level definitions — each level stacks on power
+const WEAPON_LEVELS = [
+  { name: "BLASTER",        color: "#ffdd44", shots: 1, spread: 0,    cooldown: 15, speed: 9,  size: 1,   damage: 1, shape: "rect",    sound: "shoot" },
+  { name: "RAPID FIRE",     color: "#44ff88", shots: 1, spread: 0,    cooldown: 9,  speed: 10, size: 1,   damage: 1, shape: "rect",    sound: "shoot_rapid" },
+  { name: "TWIN LASER",     color: "#44ddff", shots: 2, spread: 0.08, cooldown: 9,  speed: 10, size: 1,   damage: 1, shape: "beam",    sound: "shoot_twin" },
+  { name: "TRI-SPREAD",     color: "#ff8844", shots: 3, spread: 0.18, cooldown: 8,  speed: 11, size: 1.2, damage: 1, shape: "diamond", sound: "shoot_spread" },
+  { name: "HEAVY CANNON",   color: "#ff44ff", shots: 3, spread: 0.15, cooldown: 7,  speed: 11, size: 1.6, damage: 2, shape: "orb",     sound: "shoot_heavy" },
+  { name: "PLASMA STORM",   color: "#44ffff", shots: 5, spread: 0.22, cooldown: 6,  speed: 12, size: 1.4, damage: 2, shape: "wave",    sound: "shoot_plasma" },
+  { name: "NOVA CANNON",    color: "#ffff44", shots: 5, spread: 0.20, cooldown: 5,  speed: 13, size: 2.0, damage: 3, shape: "star",    sound: "shoot_nova" },
+];
 
 // Space constants
 const SPACE_SCROLL_SPEED = 1.5;
@@ -1396,6 +1429,32 @@ function playSound(type) {
     sub.start(t); sub.stop(t + 0.15);
   }
 
+  else if (type === "powerup") {
+    // Rising sparkle arpeggio — satisfying collect sound
+    const notes = [523.3, 659.3, 784, 1046.5]; // C5 E5 G5 C6
+    for (let i = 0; i < notes.length; i++) {
+      const osc = audioCtx.createOscillator();
+      const g = audioCtx.createGain();
+      osc.type = "sine";
+      osc.frequency.value = notes[i];
+      g.gain.setValueAtTime(0, t + i * 0.06);
+      g.gain.linearRampToValueAtTime(0.1, t + i * 0.06 + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.001, t + i * 0.06 + 0.25);
+      osc.connect(g).connect(audioCtx.destination);
+      osc.start(t + i * 0.06); osc.stop(t + i * 0.06 + 0.25);
+    }
+    // Shimmer layer
+    const ns = audioCtx.createBufferSource();
+    ns.buffer = createNoise(0.3);
+    const hp = audioCtx.createBiquadFilter();
+    hp.type = "highpass"; hp.frequency.value = 6000; hp.Q.value = 1;
+    const ng = audioCtx.createGain();
+    ng.gain.setValueAtTime(0.04, t + 0.1);
+    ng.gain.exponentialRampToValueAtTime(0.001, t + 0.35);
+    ns.connect(hp).connect(ng).connect(audioCtx.destination);
+    ns.start(t + 0.1);
+  }
+
   else if (type === "shoot") {
     // Punchy laser: layered square + saw sweep through resonant filter + click transient
     // Layer 1: resonant square sweep
@@ -1434,6 +1493,121 @@ function playSound(type) {
     cg.gain.exponentialRampToValueAtTime(0.001, t + 0.01);
     click.connect(cg).connect(audioCtx.destination);
     click.start(t); click.stop(t + 0.015);
+  }
+
+  else if (type === "shoot_rapid") {
+    // Quick high-pitched pew — snappy sine blip
+    const osc = audioCtx.createOscillator();
+    const g = audioCtx.createGain();
+    osc.type = "sine";
+    osc.frequency.setValueAtTime(1800, t);
+    osc.frequency.exponentialRampToValueAtTime(400, t + 0.05);
+    g.gain.setValueAtTime(0.06, t);
+    g.gain.exponentialRampToValueAtTime(0.001, t + 0.06);
+    osc.connect(g).connect(audioCtx.destination);
+    osc.start(t); osc.stop(t + 0.06);
+  }
+
+  else if (type === "shoot_twin") {
+    // Dual tone laser — two detuned sines for stereo-ish feel
+    for (const freq of [1400, 1600]) {
+      const osc = audioCtx.createOscillator();
+      const g = audioCtx.createGain();
+      osc.type = "sine";
+      osc.frequency.setValueAtTime(freq, t);
+      osc.frequency.exponentialRampToValueAtTime(300, t + 0.08);
+      g.gain.setValueAtTime(0.05, t);
+      g.gain.exponentialRampToValueAtTime(0.001, t + 0.09);
+      osc.connect(g).connect(audioCtx.destination);
+      osc.start(t); osc.stop(t + 0.09);
+    }
+  }
+
+  else if (type === "shoot_spread") {
+    // Chunky tri-shot — filtered square with mid-range punch
+    const osc = audioCtx.createOscillator();
+    const filt = audioCtx.createBiquadFilter();
+    const g = audioCtx.createGain();
+    osc.type = "square";
+    osc.frequency.setValueAtTime(600, t);
+    osc.frequency.exponentialRampToValueAtTime(150, t + 0.1);
+    filt.type = "bandpass"; filt.frequency.value = 800; filt.Q.value = 4;
+    g.gain.setValueAtTime(0.07, t);
+    g.gain.exponentialRampToValueAtTime(0.001, t + 0.12);
+    osc.connect(filt).connect(g).connect(audioCtx.destination);
+    osc.start(t); osc.stop(t + 0.12);
+  }
+
+  else if (type === "shoot_heavy") {
+    // Deep bass cannon — sub thump + saw crunch
+    const sub = audioCtx.createOscillator();
+    const sg = audioCtx.createGain();
+    sub.type = "sine";
+    sub.frequency.setValueAtTime(120, t);
+    sub.frequency.exponentialRampToValueAtTime(40, t + 0.12);
+    sg.gain.setValueAtTime(0.12, t);
+    sg.gain.exponentialRampToValueAtTime(0.001, t + 0.15);
+    sub.connect(sg).connect(audioCtx.destination);
+    sub.start(t); sub.stop(t + 0.15);
+    const saw = audioCtx.createOscillator();
+    const sg2 = audioCtx.createGain();
+    saw.type = "sawtooth";
+    saw.frequency.setValueAtTime(400, t);
+    saw.frequency.exponentialRampToValueAtTime(80, t + 0.08);
+    sg2.gain.setValueAtTime(0.06, t);
+    sg2.gain.exponentialRampToValueAtTime(0.001, t + 0.1);
+    saw.connect(sg2).connect(audioCtx.destination);
+    saw.start(t); saw.stop(t + 0.1);
+  }
+
+  else if (type === "shoot_plasma") {
+    // Electric crackle — noise burst through resonant bandpass
+    const ns = audioCtx.createBufferSource();
+    ns.buffer = createNoise(0.08);
+    const bp = audioCtx.createBiquadFilter();
+    bp.type = "bandpass";
+    bp.frequency.setValueAtTime(3000, t);
+    bp.frequency.exponentialRampToValueAtTime(800, t + 0.06);
+    bp.Q.value = 12;
+    const ng = audioCtx.createGain();
+    ng.gain.setValueAtTime(0.09, t);
+    ng.gain.exponentialRampToValueAtTime(0.001, t + 0.08);
+    ns.connect(bp).connect(ng).connect(audioCtx.destination);
+    ns.start(t);
+    // Undertone
+    const osc = audioCtx.createOscillator();
+    const g = audioCtx.createGain();
+    osc.type = "triangle";
+    osc.frequency.setValueAtTime(500, t);
+    osc.frequency.exponentialRampToValueAtTime(200, t + 0.06);
+    g.gain.setValueAtTime(0.05, t);
+    g.gain.exponentialRampToValueAtTime(0.001, t + 0.07);
+    osc.connect(g).connect(audioCtx.destination);
+    osc.start(t); osc.stop(t + 0.07);
+  }
+
+  else if (type === "shoot_nova") {
+    // Booming star shot — deep impact + bright sparkle
+    const sub = audioCtx.createOscillator();
+    const sg = audioCtx.createGain();
+    sub.type = "sine";
+    sub.frequency.setValueAtTime(80, t);
+    sub.frequency.exponentialRampToValueAtTime(25, t + 0.15);
+    sg.gain.setValueAtTime(0.14, t);
+    sg.gain.exponentialRampToValueAtTime(0.001, t + 0.18);
+    sub.connect(sg).connect(audioCtx.destination);
+    sub.start(t); sub.stop(t + 0.18);
+    // Sparkle — high sine arpeggio
+    for (let i = 0; i < 3; i++) {
+      const osc = audioCtx.createOscillator();
+      const g = audioCtx.createGain();
+      osc.type = "sine";
+      osc.frequency.value = 2000 + i * 600;
+      g.gain.setValueAtTime(0.04, t + i * 0.02);
+      g.gain.exponentialRampToValueAtTime(0.001, t + i * 0.02 + 0.08);
+      osc.connect(g).connect(audioCtx.destination);
+      osc.start(t + i * 0.02); osc.stop(t + i * 0.02 + 0.08);
+    }
   }
 
   else if (type === "shoot_triple") {
@@ -1884,57 +2058,116 @@ function playSound(type) {
   }
 
   else if (type === "ship_engine") {
-    // Rocket warmup: rising filtered noise + low throb
+    // Epic rocket warmup (~3 seconds): building filtered noise + deep throb + rising whine
+    // Layer 1: Filtered noise that builds from quiet rumble to roar
     const ns = audioCtx.createBufferSource();
-    ns.buffer = createNoise(2);
+    ns.buffer = createNoise(3.5);
     const bp = audioCtx.createBiquadFilter();
     bp.type = "bandpass";
-    bp.frequency.setValueAtTime(200, t);
-    bp.frequency.exponentialRampToValueAtTime(1200, t + 1.5);
-    bp.Q.value = 3;
+    bp.frequency.setValueAtTime(100, t);
+    bp.frequency.exponentialRampToValueAtTime(600, t + 1.5);
+    bp.frequency.exponentialRampToValueAtTime(1800, t + 3.0);
+    bp.Q.value = 2;
     const ng = audioCtx.createGain();
-    ng.gain.setValueAtTime(0.02, t);
-    ng.gain.linearRampToValueAtTime(0.12, t + 1.0);
-    ng.gain.exponentialRampToValueAtTime(0.001, t + 2.0);
+    ng.gain.setValueAtTime(0.01, t);
+    ng.gain.linearRampToValueAtTime(0.06, t + 1.0);
+    ng.gain.linearRampToValueAtTime(0.14, t + 2.5);
+    ng.gain.setValueAtTime(0.14, t + 3.0);
+    ng.gain.exponentialRampToValueAtTime(0.001, t + 3.5);
     ns.connect(bp).connect(ng).connect(audioCtx.destination);
     ns.start(t);
-    // Low throb
-    const osc = audioCtx.createOscillator();
-    const og = audioCtx.createGain();
-    osc.type = "sawtooth";
-    osc.frequency.setValueAtTime(40, t);
-    osc.frequency.linearRampToValueAtTime(80, t + 1.5);
-    og.gain.setValueAtTime(0.05, t);
-    og.gain.linearRampToValueAtTime(0.15, t + 1.0);
-    og.gain.exponentialRampToValueAtTime(0.001, t + 2.0);
-    osc.connect(og).connect(audioCtx.destination);
-    osc.start(t); osc.stop(t + 2.0);
-  }
-
-  else if (type === "ship_launch") {
-    // Powerful launch burst: noise + sub rumble + rising pitch
-    const ns = audioCtx.createBufferSource();
-    ns.buffer = createNoise(1.5);
-    const lp = audioCtx.createBiquadFilter();
-    lp.type = "lowpass"; lp.frequency.setValueAtTime(800, t);
-    lp.frequency.exponentialRampToValueAtTime(4000, t + 0.5);
-    lp.frequency.exponentialRampToValueAtTime(1000, t + 1.5);
-    lp.Q.value = 2;
-    const ng = audioCtx.createGain();
-    ng.gain.setValueAtTime(0.15, t);
-    ng.gain.exponentialRampToValueAtTime(0.001, t + 1.5);
-    ns.connect(lp).connect(ng).connect(audioCtx.destination);
-    ns.start(t);
-    // Sub rumble
+    // Layer 2: Deep sub throb that builds
     const sub = audioCtx.createOscillator();
     const sg = audioCtx.createGain();
     sub.type = "sine";
-    sub.frequency.setValueAtTime(30, t);
-    sub.frequency.exponentialRampToValueAtTime(60, t + 0.5);
-    sg.gain.setValueAtTime(0.2, t);
-    sg.gain.exponentialRampToValueAtTime(0.001, t + 1.2);
+    sub.frequency.setValueAtTime(25, t);
+    sub.frequency.linearRampToValueAtTime(50, t + 3.0);
+    sg.gain.setValueAtTime(0.03, t);
+    sg.gain.linearRampToValueAtTime(0.18, t + 2.5);
+    sg.gain.setValueAtTime(0.18, t + 3.0);
+    sg.gain.exponentialRampToValueAtTime(0.001, t + 3.5);
     sub.connect(sg).connect(audioCtx.destination);
-    sub.start(t); sub.stop(t + 1.2);
+    sub.start(t); sub.stop(t + 3.5);
+    // Layer 3: Rising sawtooth throb — the engine spooling up
+    const osc = audioCtx.createOscillator();
+    const og = audioCtx.createGain();
+    osc.type = "sawtooth";
+    osc.frequency.setValueAtTime(30, t);
+    osc.frequency.exponentialRampToValueAtTime(120, t + 3.0);
+    og.gain.setValueAtTime(0.02, t);
+    og.gain.linearRampToValueAtTime(0.12, t + 2.0);
+    og.gain.setValueAtTime(0.12, t + 3.0);
+    og.gain.exponentialRampToValueAtTime(0.001, t + 3.5);
+    osc.connect(og).connect(audioCtx.destination);
+    osc.start(t); osc.stop(t + 3.5);
+    // Layer 4: High whine building up (turbine spool)
+    const whine = audioCtx.createOscillator();
+    const wg = audioCtx.createGain();
+    whine.type = "sine";
+    whine.frequency.setValueAtTime(800, t + 1.0);
+    whine.frequency.exponentialRampToValueAtTime(3000, t + 3.0);
+    wg.gain.setValueAtTime(0.001, t + 1.0);
+    wg.gain.linearRampToValueAtTime(0.04, t + 2.5);
+    wg.gain.exponentialRampToValueAtTime(0.001, t + 3.5);
+    whine.connect(wg).connect(audioCtx.destination);
+    whine.start(t + 1.0); whine.stop(t + 3.5);
+  }
+
+  else if (type === "ship_launch") {
+    // Epic launch blast (~3 seconds): massive explosion + roaring thrust + doppler rise
+    // Layer 1: Huge noise burst (rocket ignition blast)
+    const ns = audioCtx.createBufferSource();
+    ns.buffer = createNoise(3.5);
+    const lp = audioCtx.createBiquadFilter();
+    lp.type = "lowpass";
+    lp.frequency.setValueAtTime(600, t);
+    lp.frequency.exponentialRampToValueAtTime(5000, t + 0.3);
+    lp.frequency.exponentialRampToValueAtTime(2000, t + 1.5);
+    lp.frequency.exponentialRampToValueAtTime(800, t + 3.0);
+    lp.Q.value = 1.5;
+    const ng = audioCtx.createGain();
+    ng.gain.setValueAtTime(0.18, t);
+    ng.gain.setValueAtTime(0.18, t + 0.5);
+    ng.gain.linearRampToValueAtTime(0.10, t + 2.0);
+    ng.gain.exponentialRampToValueAtTime(0.001, t + 3.5);
+    ns.connect(lp).connect(ng).connect(audioCtx.destination);
+    ns.start(t);
+    // Layer 2: Sub boom (feel the launch)
+    const sub = audioCtx.createOscillator();
+    const sg = audioCtx.createGain();
+    sub.type = "sine";
+    sub.frequency.setValueAtTime(20, t);
+    sub.frequency.exponentialRampToValueAtTime(80, t + 0.3);
+    sub.frequency.exponentialRampToValueAtTime(40, t + 2.0);
+    sg.gain.setValueAtTime(0.25, t);
+    sg.gain.setValueAtTime(0.20, t + 0.5);
+    sg.gain.exponentialRampToValueAtTime(0.001, t + 2.5);
+    sub.connect(sg).connect(audioCtx.destination);
+    sub.start(t); sub.stop(t + 2.5);
+    // Layer 3: Rising roar (sawtooth sweep)
+    const roar = audioCtx.createOscillator();
+    const rg = audioCtx.createGain();
+    roar.type = "sawtooth";
+    roar.frequency.setValueAtTime(60, t);
+    roar.frequency.exponentialRampToValueAtTime(200, t + 1.0);
+    roar.frequency.exponentialRampToValueAtTime(400, t + 3.0);
+    rg.gain.setValueAtTime(0.08, t);
+    rg.gain.linearRampToValueAtTime(0.12, t + 1.0);
+    rg.gain.exponentialRampToValueAtTime(0.001, t + 3.0);
+    roar.connect(rg).connect(audioCtx.destination);
+    roar.start(t); roar.stop(t + 3.0);
+    // Layer 4: High doppler whine fading away
+    const doppler = audioCtx.createOscillator();
+    const dg = audioCtx.createGain();
+    doppler.type = "sine";
+    doppler.frequency.setValueAtTime(1200, t + 0.2);
+    doppler.frequency.exponentialRampToValueAtTime(4000, t + 1.5);
+    doppler.frequency.exponentialRampToValueAtTime(6000, t + 3.0);
+    dg.gain.setValueAtTime(0.001, t + 0.2);
+    dg.gain.linearRampToValueAtTime(0.05, t + 0.8);
+    dg.gain.exponentialRampToValueAtTime(0.001, t + 3.0);
+    doppler.connect(dg).connect(audioCtx.destination);
+    doppler.start(t + 0.2); doppler.stop(t + 3.0);
   }
 
   else if (type === "boss_victory") {
@@ -3513,6 +3746,9 @@ function damagePlayer(amount) {
   player.hpBarTimer = PLAYER_HP_BAR_DURATION;
   playSound("player_hit");
 
+  // Getting hit in space drops weapon level by 1
+  if (spaceMode && spaceWeaponLevel > 0) spaceWeaponLevel--;
+
   if (player.hp <= 0) {
     player.hp = 0;
     die();
@@ -3879,43 +4115,44 @@ function updateCutscene() {
     if (cs.timer >= 30) { cs.phase = "engines_fire"; cs.timer = 0; }
   }
   else if (cs.phase === "engines_fire") {
-    // Engine particles ramp up, ship vibrates
+    // Engine particles ramp up over ~3 seconds, ship vibrates with increasing intensity
+    const ramp = Math.min(cs.timer / 180, 1); // 0→1 over full phase
+    const particleCount = 1 + Math.floor(ramp * 4); // 1→5 particles
     if (cs.timer % 2 === 0) {
-      for (let i = 0; i < 3; i++) {
+      for (let i = 0; i < particleCount; i++) {
         cs.particles.push({
           x: cs.shipX + 25 + Math.random() * 30,
           y: cs.shipY + 50,
-          velX: (Math.random() - 0.5) * 3,
-          velY: 3 + Math.random() * 4,
+          velX: (Math.random() - 0.5) * (2 + ramp * 3),
+          velY: 2 + ramp * 5 + Math.random() * 4,
           life: 25 + Math.random() * 15,
           maxLife: 40,
-          size: 4 + Math.random() * 5,
+          size: 3 + ramp * 4 + Math.random() * 4,
         });
       }
     }
     if (cs.timer === 1) playSound("ship_engine");
-    if (cs.timer >= 60) { cs.phase = "blast_off"; cs.timer = 0; }
+    if (cs.timer >= 180) { cs.phase = "blast_off"; cs.timer = 0; }
   }
   else if (cs.phase === "blast_off") {
-    // Ship accelerates upward
-    const accel = Math.pow(cs.timer / 30, 2);
-    cs.shipY -= 2 + accel * 4;
-    // Intense engine trail
-    if (cs.timer % 1 === 0) {
-      for (let i = 0; i < 4; i++) {
-        cs.particles.push({
-          x: cs.shipX + 20 + Math.random() * 40,
-          y: cs.shipY + 50,
-          velX: (Math.random() - 0.5) * 4,
-          velY: 4 + Math.random() * 6,
-          life: 30 + Math.random() * 20,
-          maxLife: 50,
-          size: 5 + Math.random() * 6,
-        });
-      }
+    // Ship accelerates upward with dramatic buildup
+    const accel = Math.pow(cs.timer / 60, 2);
+    cs.shipY -= 1 + accel * 5;
+    // Intense engine trail — grows with acceleration
+    const trailCount = 3 + Math.floor(Math.min(cs.timer / 30, 1) * 5);
+    for (let i = 0; i < trailCount; i++) {
+      cs.particles.push({
+        x: cs.shipX + 20 + Math.random() * 40,
+        y: cs.shipY + 50,
+        velX: (Math.random() - 0.5) * 5,
+        velY: 4 + Math.random() * 8,
+        life: 30 + Math.random() * 25,
+        maxLife: 55,
+        size: 5 + Math.random() * 7,
+      });
     }
     if (cs.timer === 1) playSound("ship_launch");
-    if (cs.timer >= 90) { cs.phase = "fade_out"; cs.timer = 0; }
+    if (cs.timer >= 180) { cs.phase = "fade_out"; cs.timer = 0; }
   }
   else if (cs.phase === "fade_out") {
     cs.fadeAlpha = Math.min(cs.timer / 30, 1);
@@ -3944,11 +4181,34 @@ function drawCutscene() {
   if (!cutsceneState) return;
   const cs = cutsceneState;
 
+  // Screen shake during engines_fire (ramping) and blast_off (intense)
+  let screenShakeX = 0, screenShakeY = 0;
+  if (cs.phase === "engines_fire") {
+    const ramp = Math.min(cs.timer / 180, 1);
+    screenShakeX = (Math.random() - 0.5) * ramp * 6;
+    screenShakeY = (Math.random() - 0.5) * ramp * 6;
+  } else if (cs.phase === "blast_off") {
+    const intensity = Math.min(cs.timer / 60, 1) * 10;
+    screenShakeX = (Math.random() - 0.5) * intensity;
+    screenShakeY = (Math.random() - 0.5) * intensity;
+  }
+  if (screenShakeX || screenShakeY) {
+    ctx.save();
+    ctx.translate(screenShakeX, screenShakeY);
+  }
+
   // Draw ship — use flying sprite for descend/blast_off, landed for ground phases
   const shipW = 80, shipH = 56;
   const shipScreenX = cs.shipX - camera.x;
   const shipScreenY = cs.shipY - camera.y;
-  const vib = cs.phase === "engines_fire" ? (Math.random() - 0.5) * 4 : 0;
+  // Ship vibration — ramps up during engines_fire, intense during blast_off
+  let vib = 0;
+  if (cs.phase === "engines_fire") {
+    const ramp = Math.min(cs.timer / 180, 1);
+    vib = (Math.random() - 0.5) * (2 + ramp * 8);
+  } else if (cs.phase === "blast_off") {
+    vib = (Math.random() - 0.5) * 6;
+  }
 
   const isFlying = cs.phase === "ship_descend" || cs.phase === "blast_off";
   const shipAsset = isFlying ? assets.spaceShip : assets.spaceShipLanded;
@@ -3990,6 +4250,11 @@ function drawCutscene() {
     // (handled by alpha in main draw cycle)
   }
 
+  // Restore screen shake transform
+  if (screenShakeX || screenShakeY) {
+    ctx.restore();
+  }
+
   // Fade to black during fade_out
   if (cs.phase === "fade_out") {
     ctx.fillStyle = `rgba(0, 0, 0, ${cs.fadeAlpha})`;
@@ -4011,6 +4276,8 @@ function loadSpaceLevel() {
   spaceBoss = null;
   spaceBossActive = false;
   spaceBossProjectiles = [];
+  spacePowerups = [];
+  spaceWeaponLevel = 0;
   spaceVictory = false;
 
   // Clear platformer state
@@ -4028,11 +4295,12 @@ function loadSpaceLevel() {
   victoryScreen = false;
   transitionTimer = 0;
 
-  // Reset player for space
+  // Reset player for space — 3x HP for ship combat
   player.x = 80;
   player.y = canvas.height / 2 - SPACE_PLAYER_SHIP_H / 2;
   player.velX = 0;
   player.velY = 0;
+  player.maxHp = 36;
   player.hp = player.maxHp;
   player.invincibleTimer = 0;
   player.hpBarTimer = 0;
@@ -4046,15 +4314,39 @@ function loadSpaceLevel() {
   camera.x = 0;
   camera.y = 0;
 
-  // Seed star particles
+  // Seed star particles — near layer (bright, faster)
   spaceParticles = [];
-  for (let i = 0; i < 80; i++) {
+  for (let i = 0; i < 60; i++) {
     spaceParticles.push({
       x: Math.random() * canvas.width,
       y: Math.random() * canvas.height,
-      speed: 0.3 + Math.random() * 2.5,
-      size: 0.5 + Math.random() * 2.5,
-      brightness: 0.3 + Math.random() * 0.7,
+      speed: 1.0 + Math.random() * 2.5,
+      size: 1 + Math.random() * 2,
+      brightness: 0.5 + Math.random() * 0.5,
+    });
+  }
+  // Far star layer (dim, tiny, slow)
+  spaceStarsFar = [];
+  for (let i = 0; i < 50; i++) {
+    spaceStarsFar.push({
+      x: Math.random() * canvas.width,
+      y: Math.random() * canvas.height,
+      speed: 0.1 + Math.random() * 0.4,
+      size: 0.5 + Math.random() * 1,
+      brightness: 0.15 + Math.random() * 0.3,
+    });
+  }
+  // Debris layer (asteroids floating by at various speeds)
+  spaceDebrisObjects = [];
+  for (let i = 0; i < 8; i++) {
+    spaceDebrisObjects.push({
+      x: Math.random() * canvas.width * 1.5,
+      y: Math.random() * canvas.height,
+      speed: 2.5 + Math.random() * 3,
+      size: 0.5 + Math.random() * 1.5, // scale multiplier
+      rotation: Math.random() * Math.PI * 2,
+      rotSpeed: (Math.random() - 0.5) * 0.03,
+      variant: Math.floor(Math.random() * 4), // 0=large, 1=med, 2=small, 3=brown
     });
   }
 
@@ -4100,7 +4392,7 @@ function stopSpaceEngine() {
 
 // ---- Space Background ----
 function drawSpaceBackground() {
-  // Dark gradient fallback / base
+  // Layer 0: Dark gradient base
   const grad = ctx.createLinearGradient(0, 0, 0, canvas.height);
   grad.addColorStop(0, "#0a0a1a");
   grad.addColorStop(0.5, "#0d0d2b");
@@ -4108,21 +4400,44 @@ function drawSpaceBackground() {
   ctx.fillStyle = grad;
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-  // Tiled background image if loaded
-  if (assets.spaceBg.loaded) {
-    const img = assets.spaceBg.img;
+  // Layer 1: Far nebula (very slow parallax)
+  if (assets.spaceNebula.loaded) {
+    const img = assets.spaceNebula.img;
     const scale = canvas.height / img.height;
     const bgW = img.width * scale;
-    const offset = -(spaceScrollX * 0.3) % bgW;
+    const offset = -(spaceScrollX * 0.05) % bgW;
     ctx.save();
-    ctx.globalAlpha = 0.5;
-    for (let x = offset - bgW; x < canvas.width; x += bgW) {
+    ctx.globalAlpha = 0.3;
+    for (let x = offset - bgW; x < canvas.width + bgW; x += bgW) {
       ctx.drawImage(img, x, 0, bgW, canvas.height);
     }
     ctx.restore();
   }
 
-  // Star field
+  // Layer 2: Mid-far tiled starfield background
+  if (assets.spaceBg.loaded) {
+    const img = assets.spaceBg.img;
+    const scale = canvas.height / img.height;
+    const bgW = img.width * scale;
+    const offset = -(spaceScrollX * 0.15) % bgW;
+    ctx.save();
+    ctx.globalAlpha = 0.5;
+    for (let x = offset - bgW; x < canvas.width + bgW; x += bgW) {
+      ctx.drawImage(img, x, 0, bgW, canvas.height);
+    }
+    ctx.restore();
+  }
+
+  // Layer 3: Far stars (tiny, dim, slow)
+  for (const star of spaceStarsFar) {
+    ctx.save();
+    ctx.globalAlpha = star.brightness;
+    ctx.fillStyle = "#aaaacc";
+    ctx.fillRect(star.x, star.y, star.size, star.size);
+    ctx.restore();
+  }
+
+  // Layer 4: Near stars (bright, faster)
   for (const star of spaceParticles) {
     ctx.save();
     ctx.globalAlpha = star.brightness;
@@ -4132,13 +4447,58 @@ function drawSpaceBackground() {
   }
 }
 
+function drawSpaceDebris() {
+  // Layer 5: Foreground debris (asteroids flying by, fastest parallax)
+  const debrisAssets = [assets.debrisLarge, assets.debrisMed, assets.debrisSmall, assets.debrisBrown];
+  for (const d of spaceDebrisObjects) {
+    ctx.save();
+    ctx.globalAlpha = 0.6;
+    ctx.translate(d.x, d.y);
+    ctx.rotate(d.rotation);
+    const asset = debrisAssets[d.variant];
+    if (asset && asset.loaded) {
+      const w = asset.img.width * d.size;
+      const h = asset.img.height * d.size;
+      ctx.drawImage(asset.img, -w / 2, -h / 2, w, h);
+    } else {
+      const s = 12 * d.size;
+      ctx.fillStyle = "#555566";
+      ctx.beginPath();
+      ctx.arc(0, 0, s, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+}
+
 function updateSpaceStars() {
   spaceScrollX += SPACE_SCROLL_SPEED;
+  // Near stars
   for (const star of spaceParticles) {
     star.x -= star.speed;
     if (star.x < -star.size) {
       star.x = canvas.width + star.size;
       star.y = Math.random() * canvas.height;
+    }
+  }
+  // Far stars
+  for (const star of spaceStarsFar) {
+    star.x -= star.speed;
+    if (star.x < -star.size) {
+      star.x = canvas.width + star.size;
+      star.y = Math.random() * canvas.height;
+    }
+  }
+  // Debris (fastest layer)
+  for (const d of spaceDebrisObjects) {
+    d.x -= d.speed;
+    d.rotation += d.rotSpeed;
+    if (d.x < -60) {
+      d.x = canvas.width + 40 + Math.random() * 200;
+      d.y = Math.random() * canvas.height;
+      d.variant = Math.floor(Math.random() * 4);
+      d.size = 0.5 + Math.random() * 1.5;
+      d.speed = 2.5 + Math.random() * 3;
     }
   }
 }
@@ -4189,24 +4549,24 @@ function updateSpacePlayer() {
     if (shifting && shootCooldown === 0) {
       const cx = player.x + SPACE_PLAYER_SHIP_W / 2;
       const cy = player.y + SPACE_PLAYER_SHIP_H / 2;
-      if (corvetteMode) {
-        for (const spread of [-1, 0, 1]) {
-          const sa = fireAngle + spread * 0.15;
-          projectiles.push({
-            x: cx, y: cy,
-            velX: Math.cos(sa) * PROJECTILE_SPEED,
-            velY: Math.sin(sa) * PROJECTILE_SPEED,
-          });
-        }
-      } else {
+      const wep = WEAPON_LEVELS[Math.min(spaceWeaponLevel, WEAPON_LEVELS.length - 1)];
+      const effectiveShots = corvetteMode ? Math.max(wep.shots, 3) : wep.shots;
+      const effectiveSpread = corvetteMode ? Math.max(wep.spread, 0.15) : wep.spread;
+      for (let s = 0; s < effectiveShots; s++) {
+        const offset = effectiveShots === 1 ? 0 :
+          (s / (effectiveShots - 1) - 0.5) * 2 * effectiveSpread;
+        const sa = fireAngle + offset;
         projectiles.push({
           x: cx, y: cy,
-          velX: Math.cos(fireAngle) * PROJECTILE_SPEED,
-          velY: Math.sin(fireAngle) * PROJECTILE_SPEED,
+          velX: Math.cos(sa) * wep.speed,
+          velY: Math.sin(sa) * wep.speed,
+          damage: wep.damage,
+          size: wep.size,
+          nova: spaceWeaponLevel >= 6,
         });
       }
-      shootCooldown = SHOOT_COOLDOWN;
-      playSound(corvetteMode ? "shoot_triple" : "shoot");
+      shootCooldown = wep.cooldown;
+      playSound(corvetteMode ? "shoot_triple" : (spaceMode ? wep.sound : "shoot"));
     }
   }
 }
@@ -4237,14 +4597,15 @@ function drawSpacePlayer() {
     return;
   }
 
-  if (assets.spaceShip.loaded) {
+  const shipAsset = assets.spacePlayerShip.loaded ? assets.spacePlayerShip : assets.spaceShip;
+  if (shipAsset.loaded) {
     ctx.save();
     if (player.facing === -1) {
       ctx.translate(sx + SPACE_PLAYER_SHIP_W, sy);
       ctx.scale(-1, 1);
-      ctx.drawImage(assets.spaceShip.img, 0, 0, SPACE_PLAYER_SHIP_W, SPACE_PLAYER_SHIP_H);
+      ctx.drawImage(shipAsset.img, 0, 0, SPACE_PLAYER_SHIP_W, SPACE_PLAYER_SHIP_H);
     } else {
-      ctx.drawImage(assets.spaceShip.img, sx, sy, SPACE_PLAYER_SHIP_W, SPACE_PLAYER_SHIP_H);
+      ctx.drawImage(shipAsset.img, sx, sy, SPACE_PLAYER_SHIP_W, SPACE_PLAYER_SHIP_H);
     }
     ctx.restore();
   } else {
@@ -4300,19 +4661,24 @@ function updateSpaceProjectiles() {
       continue;
     }
     // Check vs space enemies
+    const dmg = p.damage || 1;
     for (let e = spaceEnemies.length - 1; e >= 0; e--) {
       const en = spaceEnemies[e];
       if (p.x > en.x && p.x < en.x + en.width && p.y > en.y && p.y < en.y + en.height) {
-        en.hp--;
+        en.hp -= dmg;
         if (en.hp <= 0) {
           spawnDeathExplosion(en, 2, 2, "spaceEnemy");
+          maybeSpawnPowerup(en.x + en.width / 2, en.y + en.height / 2);
           spaceEnemies.splice(e, 1);
           playSound("enemy_death");
+          // Nova explosion — damage nearby enemies
+          if (p.nova) novaExplosion(en.x + en.width / 2, en.y + en.height / 2, dmg);
         } else {
           playSound("enemy_hit");
         }
-        projectiles.splice(i, 1);
-        break;
+        if (!p.nova) { projectiles.splice(i, 1); break; }
+        // Nova rounds pierce through (but only one target per frame)
+        projectiles.splice(i, 1); break;
       }
     }
   }
@@ -4320,11 +4686,12 @@ function updateSpaceProjectiles() {
   if (spaceBoss && spaceBoss.alive) {
     for (let i = projectiles.length - 1; i >= 0; i--) {
       const p = projectiles[i];
+      const dmg = p.damage || 1;
       if (spaceBoss.invincibleTimer > 0) continue;
       if (p.x > spaceBoss.x && p.x < spaceBoss.x + spaceBoss.width &&
           p.y > spaceBoss.y && p.y < spaceBoss.y + spaceBoss.height) {
-        spaceBoss.hp--;
-        spaceBoss.invincibleTimer = 15;
+        spaceBoss.hp -= dmg;
+        spaceBoss.invincibleTimer = 10;
         const destroyed = pickRandomChunks(spaceBoss, 1, 16);
         spawnChunkDebris(spaceBoss, destroyed, 4, 4, "spaceBattlecruiser");
         if (spaceBoss.hp <= 0) {
@@ -4343,13 +4710,105 @@ function updateSpaceProjectiles() {
 }
 
 function drawSpaceProjectiles() {
+  const wep = WEAPON_LEVELS[Math.min(spaceWeaponLevel, WEAPON_LEVELS.length - 1)];
+  const col = corvetteMode ? "#ff4444" : wep.color;
+  const glowCol = corvetteMode ? "#ff0000" : wep.color;
   for (const p of projectiles) {
-    ctx.save();
-    ctx.fillStyle = corvetteMode ? "#ff4444" : "#ffdd44";
-    ctx.shadowColor = corvetteMode ? "#ff0000" : "#ffaa00";
-    ctx.shadowBlur = 6;
-    ctx.fillRect(p.x - 4, p.y - 2, 8, 4);
-    ctx.restore();
+    const sz = (p.size || 1);
+    const shape = corvetteMode ? "rect" : (p.shape || wep.shape || "rect");
+
+    if (shape === "beam") {
+      // Long thin beam
+      ctx.globalAlpha = 0.3;
+      ctx.fillStyle = glowCol;
+      ctx.fillRect(p.x - 7 * sz, p.y - 2 * sz, 14 * sz, 4 * sz);
+      ctx.globalAlpha = 1.0;
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(p.x - 6 * sz, p.y - 1 * sz, 12 * sz, 2 * sz);
+    } else if (shape === "diamond") {
+      // Rotating diamond
+      ctx.globalAlpha = 0.3;
+      ctx.fillStyle = glowCol;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, 6 * sz, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.globalAlpha = 1.0;
+      ctx.fillStyle = col;
+      ctx.save();
+      ctx.translate(p.x, p.y);
+      ctx.rotate(Date.now() / 80);
+      ctx.fillRect(-4 * sz, -4 * sz, 8 * sz, 8 * sz);
+      ctx.restore();
+    } else if (shape === "orb") {
+      // Big glowing orb
+      ctx.globalAlpha = 0.25;
+      ctx.fillStyle = glowCol;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, 8 * sz, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.globalAlpha = 0.9;
+      ctx.fillStyle = col;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, 5 * sz, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.globalAlpha = 1.0;
+      ctx.fillStyle = "#ffffff";
+      ctx.beginPath();
+      ctx.arc(p.x - 1.5 * sz, p.y - 1.5 * sz, 2 * sz, 0, Math.PI * 2);
+      ctx.fill();
+    } else if (shape === "wave") {
+      // Wavy plasma bolt
+      const wobble = Math.sin(Date.now() / 50 + p.x * 0.3) * 3;
+      ctx.globalAlpha = 0.3;
+      ctx.fillStyle = glowCol;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y + wobble, 7 * sz, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.globalAlpha = 1.0;
+      ctx.fillStyle = col;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y + wobble, 4 * sz, 0, Math.PI * 2);
+      ctx.fill();
+      // Trail dots
+      ctx.globalAlpha = 0.4;
+      ctx.beginPath();
+      ctx.arc(p.x - 6 * sz, p.y - wobble * 0.5, 2 * sz, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.globalAlpha = 1.0;
+    } else if (shape === "star") {
+      // Nova star with pulsing ring
+      const pulse = 0.8 + Math.sin(Date.now() / 60) * 0.2;
+      ctx.globalAlpha = 0.2;
+      ctx.fillStyle = "#ffff00";
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, 10 * sz * pulse, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.globalAlpha = 0.9;
+      ctx.fillStyle = col;
+      ctx.save();
+      ctx.translate(p.x, p.y);
+      ctx.rotate(Date.now() / 100);
+      // 4-point star
+      for (let i = 0; i < 4; i++) {
+        ctx.rotate(Math.PI / 2);
+        ctx.fillRect(-1.5 * sz, 0, 3 * sz, 6 * sz);
+      }
+      ctx.restore();
+      ctx.fillStyle = "#ffffff";
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, 2.5 * sz, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.globalAlpha = 1.0;
+    } else {
+      // Default rect
+      const w = 8 * sz, h = 4 * sz;
+      ctx.globalAlpha = 0.35;
+      ctx.fillStyle = glowCol;
+      ctx.fillRect(p.x - w / 2 - 3, p.y - h / 2 - 3, w + 6, h + 6);
+      ctx.globalAlpha = 1.0;
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(p.x - w / 2, p.y - h / 2, w, h);
+    }
   }
 }
 
@@ -4424,17 +4883,17 @@ function drawSpaceBeam() {
 // ---- Enemy Wave System ----
 
 const SPACE_WAVE_DEFS = [
-  // Wave format: { count, type, delay }
+  // Wave format: { count, type, delay } — balanced for fun, not frustration
+  { count: 2, type: "basic", delay: 25 },
   { count: 3, type: "basic", delay: 20 },
-  { count: 4, type: "basic", delay: 15 },
+  { count: 2, type: "sine", delay: 22 },
+  { count: 2, type: "basic", delay: 15, extra: { count: 1, type: "sine", delay: 20 } },
   { count: 3, type: "sine", delay: 18 },
-  { count: 2, type: "basic", delay: 10, extra: { count: 2, type: "sine", delay: 15 } },
-  { count: 4, type: "sine", delay: 12 },
-  { count: 3, type: "diagonal", delay: 15 },
-  { count: 5, type: "basic", delay: 10 },
-  { count: 3, type: "swooper", delay: 20 },
-  { count: 2, type: "diagonal", delay: 12, extra: { count: 2, type: "swooper", delay: 15 } },
-  { count: 4, type: "swooper", delay: 12 },
+  { count: 2, type: "diagonal", delay: 20 },
+  { count: 3, type: "basic", delay: 15 },
+  { count: 2, type: "swooper", delay: 25 },
+  { count: 2, type: "diagonal", delay: 18, extra: { count: 1, type: "swooper", delay: 20 } },
+  { count: 3, type: "swooper", delay: 18 },
 ];
 
 function spawnSpaceWave() {
@@ -4480,10 +4939,10 @@ function updateSpaceEnemies() {
   if (!spaceBossActive) {
     spaceDistance += SPACE_SCROLL_SPEED * 2;
     spaceWaveTimer--;
-    if (spaceWaveTimer <= 0 && spaceDistance < SPACE_BOSS_THRESHOLD) {
+    if (spaceWaveTimer <= 0 && spaceDistance < SPACE_BOSS_THRESHOLD && spaceEnemies.length <= 3) {
       spawnSpaceWave();
       spaceWaveIndex++;
-      spaceWaveTimer = 120 + Math.floor(Math.random() * 80);
+      spaceWaveTimer = 180 + Math.floor(Math.random() * 120);
     }
     // Boss trigger
     if (spaceDistance >= SPACE_BOSS_THRESHOLD && spaceEnemies.length === 0) {
@@ -4518,19 +4977,50 @@ function updateSpaceEnemies() {
       }
     }
 
-    // Shoot at player
+    // Shoot at player — type-specific patterns
     en.shootTimer--;
     if (en.shootTimer <= 0) {
       const dx = player.x - en.x;
       const dy = player.y - en.y;
       const dist = Math.sqrt(dx * dx + dy * dy) || 1;
-      spaceEnemyProjectiles.push({
-        x: en.x, y: en.y + en.height / 2,
-        velX: (dx / dist) * 3.5,
-        velY: (dy / dist) * 3.5,
-        size: 5,
-      });
-      en.shootTimer = 80 + Math.floor(Math.random() * 60);
+      const aimX = dx / dist, aimY = dy / dist;
+
+      if (en.type === "basic") {
+        // Single aimed shot
+        spaceEnemyProjectiles.push({
+          x: en.x, y: en.y + en.height / 2,
+          velX: aimX * 3, velY: aimY * 3, size: 5,
+        });
+        en.shootTimer = 150 + Math.floor(Math.random() * 80);
+      } else if (en.type === "sine") {
+        // Double spread shot (+/- 10 degrees)
+        const angle = Math.atan2(aimY, aimX);
+        for (const offset of [-0.17, 0.17]) {
+          const a = angle + offset;
+          spaceEnemyProjectiles.push({
+            x: en.x, y: en.y + en.height / 2,
+            velX: Math.cos(a) * 3, velY: Math.sin(a) * 3, size: 4,
+          });
+        }
+        en.shootTimer = 130 + Math.floor(Math.random() * 70);
+      } else if (en.type === "diagonal") {
+        // Triple burst
+        for (let b = 0; b < 3; b++) {
+          spaceEnemyProjectiles.push({
+            x: en.x + b * 8, y: en.y + en.height / 2,
+            velX: aimX * 3.5, velY: aimY * 3.5 + (b - 1) * 0.3, size: 4,
+          });
+        }
+        en.shootTimer = 140 + Math.floor(Math.random() * 70);
+      } else if (en.type === "swooper") {
+        // Homing missile (slow, tracks player, expires)
+        spaceEnemyProjectiles.push({
+          x: en.x, y: en.y + en.height / 2,
+          velX: aimX * 1.8, velY: aimY * 1.8, size: 7,
+          homing: true, life: 150,
+        });
+        en.shootTimer = 180 + Math.floor(Math.random() * 80);
+      }
       playSound("missile_launch");
     }
 
@@ -4547,11 +5037,17 @@ function updateSpaceEnemies() {
 }
 
 function drawSpaceEnemies() {
+  const enemyAssets = {
+    basic: assets.spaceEnemyBasic,
+    sine: assets.spaceEnemySine,
+    diagonal: assets.spaceEnemyDiagonal,
+    swooper: assets.spaceEnemySwooper,
+  };
   for (const en of spaceEnemies) {
-    if (assets.spaceEnemy.loaded) {
-      ctx.save();
-      ctx.drawImage(assets.spaceEnemy.img, en.x, en.y, en.width, en.height);
-      ctx.restore();
+    const typeAsset = enemyAssets[en.type];
+    const asset = (typeAsset && typeAsset.loaded) ? typeAsset : (assets.spaceEnemy.loaded ? assets.spaceEnemy : null);
+    if (asset) {
+      ctx.drawImage(asset.img, en.x, en.y, en.width, en.height);
     } else {
       // Fallback: colored diamond shape
       ctx.save();
@@ -4563,7 +5059,6 @@ function drawSpaceEnemies() {
       ctx.lineTo(en.x + en.width / 2, en.y + en.height);
       ctx.closePath();
       ctx.fill();
-      // Cockpit
       ctx.fillStyle = "#ffcc44";
       ctx.fillRect(en.x + en.width / 2 - 4, en.y + en.height / 2 - 4, 8, 8);
       ctx.restore();
@@ -4584,6 +5079,21 @@ function drawSpaceEnemies() {
 function updateSpaceEnemyProjectiles() {
   for (let i = spaceEnemyProjectiles.length - 1; i >= 0; i--) {
     const p = spaceEnemyProjectiles[i];
+
+    // Homing missiles gently track the player
+    if (p.homing) {
+      p.life--;
+      if (p.life <= 0) { spaceEnemyProjectiles.splice(i, 1); continue; }
+      const dx = player.x + SPACE_PLAYER_SHIP_W / 2 - p.x;
+      const dy = player.y + SPACE_PLAYER_SHIP_H / 2 - p.y;
+      const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+      const turnRate = 0.04;
+      p.velX += (dx / dist) * turnRate;
+      p.velY += (dy / dist) * turnRate;
+      const spd = Math.sqrt(p.velX * p.velX + p.velY * p.velY);
+      if (spd > 3) { p.velX = (p.velX / spd) * 3; p.velY = (p.velY / spd) * 3; }
+    }
+
     p.x += p.velX;
     p.y += p.velY;
 
@@ -4604,14 +5114,33 @@ function updateSpaceEnemyProjectiles() {
 
 function drawSpaceEnemyProjectiles() {
   for (const p of spaceEnemyProjectiles) {
-    ctx.save();
-    ctx.fillStyle = "#ff4466";
-    ctx.shadowColor = "#ff0044";
-    ctx.shadowBlur = 5;
-    ctx.beginPath();
-    ctx.arc(p.x, p.y, p.size / 2, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.restore();
+    if (p.homing) {
+      // Glow layer
+      ctx.globalAlpha = 0.3;
+      ctx.fillStyle = "#ff4400";
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.size / 2 + 4, 0, Math.PI * 2);
+      ctx.fill();
+      // Core
+      ctx.globalAlpha = 1.0;
+      ctx.fillStyle = "#ff8844";
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.size / 2, 0, Math.PI * 2);
+      ctx.fill();
+    } else {
+      // Glow layer
+      ctx.globalAlpha = 0.3;
+      ctx.fillStyle = "#ff0044";
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.size / 2 + 3, 0, Math.PI * 2);
+      ctx.fill();
+      // Core
+      ctx.globalAlpha = 1.0;
+      ctx.fillStyle = "#ff4466";
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.size / 2, 0, Math.PI * 2);
+      ctx.fill();
+    }
   }
 }
 
@@ -4623,7 +5152,7 @@ function spawnSpaceBoss() {
     x: canvas.width + 20,
     y: canvas.height / 2 - 60,
     width: 200, height: 120,
-    hp: 30, maxHp: 30,
+    hp: 50, maxHp: 50,
     speed: 0.8,
     alive: true,
     invincibleTimer: 0,
@@ -4791,21 +5320,29 @@ function drawSpaceBoss() {
 
 function drawSpaceBossProjectiles() {
   for (const p of spaceBossProjectiles) {
-    ctx.save();
     if (p.type === "missile") {
+      // Glow layer
+      ctx.globalAlpha = 0.3;
+      ctx.fillStyle = "#ff4400";
+      ctx.fillRect(p.x - p.size / 2 - 3, p.y - p.size / 4 - 3, p.size + 6, p.size / 2 + 6);
+      // Core
+      ctx.globalAlpha = 1.0;
       ctx.fillStyle = "#ff8844";
-      ctx.shadowColor = "#ff4400";
-      ctx.shadowBlur = 6;
       ctx.fillRect(p.x - p.size / 2, p.y - p.size / 4, p.size, p.size / 2);
     } else {
+      // Glow layer
+      ctx.globalAlpha = 0.3;
+      ctx.fillStyle = "#ff00ff";
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.size / 2 + 3, 0, Math.PI * 2);
+      ctx.fill();
+      // Core
+      ctx.globalAlpha = 1.0;
       ctx.fillStyle = "#ff44ff";
-      ctx.shadowColor = "#ff00ff";
-      ctx.shadowBlur = 5;
       ctx.beginPath();
       ctx.arc(p.x, p.y, p.size / 2, 0, Math.PI * 2);
       ctx.fill();
     }
-    ctx.restore();
   }
 }
 
@@ -4859,6 +5396,19 @@ function drawSpaceHUD() {
     ctx.textAlign = "left";
   }
 
+  // Weapon level indicator (below hull bar)
+  const wep = WEAPON_LEVELS[Math.min(spaceWeaponLevel, WEAPON_LEVELS.length - 1)];
+  ctx.fillStyle = "rgba(0, 0, 0, 0.5)";
+  ctx.fillRect(8, 40, 200, 18);
+  ctx.fillStyle = wep.color;
+  ctx.font = "bold 11px monospace";
+  ctx.fillText(wep.name, 14, 53);
+  // Weapon level pips
+  for (let i = 0; i < WEAPON_LEVELS.length; i++) {
+    ctx.fillStyle = i <= spaceWeaponLevel ? wep.color : "#333";
+    ctx.fillRect(130 + i * 11, 44, 8, 10);
+  }
+
   // Level indicator (top-right)
   ctx.fillStyle = "rgba(0, 0, 0, 0.4)";
   ctx.fillRect(canvas.width - 100, 8, 92, 28);
@@ -4910,6 +5460,127 @@ function drawSpaceHUD() {
   }
 }
 
+// ---- Space Powerups ----
+
+function maybeSpawnPowerup(x, y) {
+  // 30% chance to drop a weapon powerup, 10% chance for health
+  const roll = Math.random();
+  if (roll < 0.30) {
+    spacePowerups.push({
+      x: x, y: y, type: "weapon",
+      velX: -1.5, velY: (Math.random() - 0.5) * 1.5,
+      life: 360, // 6 seconds to collect
+      pulse: Math.random() * Math.PI * 2,
+    });
+  } else if (roll < 0.40) {
+    spacePowerups.push({
+      x: x, y: y, type: "health",
+      velX: -1.5, velY: (Math.random() - 0.5) * 1.5,
+      life: 360,
+      pulse: Math.random() * Math.PI * 2,
+    });
+  }
+}
+
+function novaExplosion(cx, cy, dmg) {
+  // Damage all enemies within 80px radius
+  const radius = 80;
+  for (let i = spaceEnemies.length - 1; i >= 0; i--) {
+    const en = spaceEnemies[i];
+    const dx = (en.x + en.width / 2) - cx;
+    const dy = (en.y + en.height / 2) - cy;
+    if (dx * dx + dy * dy < radius * radius) {
+      en.hp -= dmg;
+      if (en.hp <= 0) {
+        spawnDeathExplosion(en, 2, 2, "spaceEnemy");
+        maybeSpawnPowerup(en.x + en.width / 2, en.y + en.height / 2);
+        spaceEnemies.splice(i, 1);
+        playSound("enemy_death");
+      }
+    }
+  }
+  // Visual: spawn some explosion particles
+  for (let i = 0; i < 8; i++) {
+    const angle = (i / 8) * Math.PI * 2;
+    deathEffects.push({
+      timer: 20,
+      pieces: [{
+        x: cx, y: cy,
+        velX: Math.cos(angle) * 4,
+        velY: Math.sin(angle) * 4,
+        size: 6, rot: 0, rotSpeed: 0.1,
+        color: "#ffff44",
+      }],
+    });
+  }
+}
+
+function updateSpacePowerups() {
+  for (let i = spacePowerups.length - 1; i >= 0; i--) {
+    const pu = spacePowerups[i];
+    pu.x += pu.velX;
+    pu.y += pu.velY;
+    pu.pulse += 0.1;
+    pu.life--;
+
+    // Remove if off-screen or expired
+    if (pu.x < -30 || pu.life <= 0) {
+      spacePowerups.splice(i, 1);
+      continue;
+    }
+
+    // Check collection by player
+    const pw = 20, ph = 20;
+    if (pu.x - pw / 2 < player.x + SPACE_PLAYER_SHIP_W && pu.x + pw / 2 > player.x &&
+        pu.y - ph / 2 < player.y + SPACE_PLAYER_SHIP_H && pu.y + ph / 2 > player.y) {
+      if (pu.type === "weapon") {
+        spaceWeaponLevel = Math.min(spaceWeaponLevel + 1, WEAPON_LEVELS.length - 1);
+      } else if (pu.type === "health") {
+        player.hp = Math.min(player.hp + 6, player.maxHp);
+      }
+      playSound("powerup");
+      spacePowerups.splice(i, 1);
+    }
+  }
+}
+
+function drawSpacePowerups() {
+  for (const pu of spacePowerups) {
+    const pulse = 0.7 + Math.sin(pu.pulse) * 0.3;
+    const sz = 10 * pulse;
+    ctx.save();
+    // Glow
+    ctx.globalAlpha = 0.3 * pulse;
+    ctx.fillStyle = pu.type === "weapon" ? "#44ffff" : "#44ff44";
+    ctx.beginPath();
+    ctx.arc(pu.x, pu.y, sz + 6, 0, Math.PI * 2);
+    ctx.fill();
+    // Core
+    ctx.globalAlpha = 0.9;
+    if (pu.type === "weapon") {
+      // Arrow/chevron pointing right
+      ctx.fillStyle = "#00ffff";
+      ctx.beginPath();
+      ctx.moveTo(pu.x + sz, pu.y);
+      ctx.lineTo(pu.x - sz * 0.6, pu.y - sz * 0.8);
+      ctx.lineTo(pu.x - sz * 0.2, pu.y);
+      ctx.lineTo(pu.x - sz * 0.6, pu.y + sz * 0.8);
+      ctx.closePath();
+      ctx.fill();
+    } else {
+      // Plus sign (health)
+      ctx.fillStyle = "#44ff44";
+      ctx.fillRect(pu.x - sz * 0.7, pu.y - sz * 0.2, sz * 1.4, sz * 0.4);
+      ctx.fillRect(pu.x - sz * 0.2, pu.y - sz * 0.7, sz * 0.4, sz * 1.4);
+    }
+    // Blinking when about to expire
+    if (pu.life < 90 && Math.floor(pu.life / 6) % 2 === 0) {
+      ctx.globalAlpha = 0;
+    }
+    ctx.restore();
+  }
+}
+
 // ---- Main Space Update / Draw ----
 function updateSpaceLevel() {
   if (spaceVictory) return;
@@ -4918,6 +5589,7 @@ function updateSpaceLevel() {
   updateSpaceProjectiles();
   updateSpaceBeam();
   updateSpaceEnemies();
+  updateSpacePowerups();
   updateSpaceEnemyProjectiles();
   updateSpaceBoss();
   updateSpaceBossProjectiles();
@@ -4930,11 +5602,12 @@ function drawSpaceLevel() {
   drawSpaceBoss();
   drawSpaceBossProjectiles();
   drawSpaceEnemyProjectiles();
+  drawSpacePowerups();
   drawSpaceProjectiles();
   drawSpaceBeam();
   drawSpacePlayer();
-  // Death effects with no camera offset
   drawDeathEffects();
+  drawSpaceDebris();
   drawSpaceHUD();
 }
 
@@ -4956,6 +5629,10 @@ window.addEventListener("keydown", (e) => {
     spaceEnemies = [];
     spaceEnemyProjectiles = [];
     spaceBossProjectiles = [];
+    spacePowerups = [];
+    spaceWeaponLevel = 0;
+    spaceStarsFar = [];
+    spaceDebrisObjects = [];
     stopSpaceEngine();
     loadLevel(0);
   }
